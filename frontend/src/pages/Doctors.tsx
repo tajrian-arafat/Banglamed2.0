@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../core/api";
-import { Loading, Empty } from "../design-system/UI";
+import { Loading, Empty, ErrorState } from "../design-system/UI";
 import { IconStethoscope, IconSearch } from "../design-system/Icons";
 
 interface Doc { id: number; doctor_code: string; name: string; speciality: string | null; qualifications: string | null; district: string | null; city: string | null; }
@@ -12,23 +12,48 @@ export default function Doctors() {
   const [specs, setSpecs] = useState<{ id: number; name: string }[]>([]);
   const [rows, setRows] = useState<Doc[]>([]);
   const [total, setTotal] = useState(0);
+  const [allTotal, setAllTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [reload, setReload] = useState(0);
 
-  useEffect(() => { api.get<{ results: { id: number; name: string }[] }>("/api/directory/specialities").then((r) => setSpecs(r.results)).catch(() => {}); }, []);
+  // All specialities (non-fatal: the dropdown simply stays empty if this fails).
+  useEffect(() => {
+    let alive = true;
+    api.get<{ results: { id: number; name: string }[] }>("/api/directory/specialities")
+      .then((r) => { if (alive) setSpecs(r.results); })
+      .catch(() => { if (alive) setSpecs([]); });
+    // Unfiltered directory size, so the header can show a true total.
+    api.get<{ total: number }>("/api/directory/doctors?limit=1")
+      .then((r) => { if (alive) setAllTotal(r.total); })
+      .catch(() => { if (alive) setAllTotal(null); });
+    return () => { alive = false; };
+  }, [reload]);
 
   useEffect(() => {
+    let alive = true;
     setLoading(true);
+    setErr("");
     const t = setTimeout(() => {
-      api.get<{ total: number; results: Doc[] }>(`/api/directory/doctors?q=${encodeURIComponent(q)}&speciality=${encodeURIComponent(spec)}&limit=48`)
-        .then((r) => { setRows(r.results); setTotal(r.total); }).finally(() => setLoading(false));
+      api.get<{ total: number; results: Doc[] }>(
+        `/api/directory/doctors?q=${encodeURIComponent(q)}&speciality=${encodeURIComponent(spec)}&limit=48`,
+      )
+        .then((r) => { if (alive) { setRows(r.results); setTotal(r.total); } })
+        .catch((e) => { if (alive) { setRows([]); setTotal(0); setErr(e.message || "Could not load doctors"); } })
+        .finally(() => { if (alive) setLoading(false); });
     }, 200);
-    return () => clearTimeout(t);
-  }, [q, spec]);
+    return () => { alive = false; clearTimeout(t); };
+  }, [q, spec, reload]);
+
+  const retry = useCallback(() => setReload((n) => n + 1), []);
+  const filtering = q.trim().length > 0 || spec.length > 0;
 
   return (
     <div className="container">
       <h1>Find a doctor</h1>
-      <p className="muted">Browse {total.toLocaleString()} doctors by name and speciality.</p>
+      <p className="muted">
+        {allTotal != null ? `Browse ${allTotal.toLocaleString()} doctors by name and speciality.` : "Browse doctors by name and speciality."}
+      </p>
       <div className="row wrap" style={{ gap: 10, marginBottom: 20 }}>
         <div className="search-hero" style={{ flex: 1, minWidth: 260 }}>
           <span className="search-icon"><IconSearch size={20} /></span>
@@ -39,19 +64,30 @@ export default function Doctors() {
           {specs.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
         </select>
       </div>
-      {loading ? <Loading /> : rows.length === 0 ? (
-        <Empty icon={<IconStethoscope size={30} />} title="No doctors found" hint="Try a different name or speciality." />
+
+      {loading ? <Loading /> : err ? (
+        <ErrorState message={err} onRetry={retry} />
+      ) : rows.length === 0 ? (
+        <Empty
+          icon={<IconStethoscope size={30} />}
+          title={filtering ? "No doctors match your search" : "No doctors found"}
+          hint={filtering ? "Try a different name or clear the speciality filter." : "The directory is empty."}
+          action={filtering ? <button className="btn btn-sm" onClick={() => { setQ(""); setSpec(""); }}>Clear filters</button> : undefined}
+        />
       ) : (
-        <div className="grid grid-3">
-          {rows.map((d) => (
-            <Link key={d.id} to={`/doctors/${d.id}`} className="glass card med-card">
-              <h3 style={{ margin: 0 }}>{d.name}</h3>
-              <div className="muted small" style={{ marginTop: 6 }}>{d.speciality || "—"}</div>
-              <div className="tiny muted" style={{ marginTop: 4 }}>{d.qualifications || ""}</div>
-              <div className="tiny muted">{d.district || d.city || ""}</div>
-            </Link>
-          ))}
-        </div>
+        <>
+          {filtering && <div className="muted small" style={{ marginBottom: 10 }}>{total.toLocaleString()} result{total === 1 ? "" : "s"}</div>}
+          <div className="grid grid-3">
+            {rows.map((d) => (
+              <Link key={d.id} to={`/doctors/${d.id}`} className="glass card med-card">
+                <h3 style={{ margin: 0 }}>{d.name}</h3>
+                <div className="muted small" style={{ marginTop: 6 }}>{d.speciality || "—"}</div>
+                <div className="tiny muted" style={{ marginTop: 4 }}>{d.qualifications || ""}</div>
+                <div className="tiny muted">{d.district || d.city || ""}</div>
+              </Link>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

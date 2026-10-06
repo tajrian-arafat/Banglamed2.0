@@ -46,6 +46,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/medicines" element={<Medicines />} />
+        <Route path="/medicines/q/:q" element={<Medicines />} />
         <Route path="/medicines/:id" element={<MedicineDetail />} />
         <Route path="/tests" element={<Tests />} />
         <Route path="/tests/:id" element={<TestDetail />} />

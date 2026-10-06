@@ -1,31 +1,13 @@
-# Python
 __pycache__/
-*.py[cod]
-.venv/
-venv/
+*.pyc
 .pytest_cache/
-.ruff_cache/
-.mypy_cache/
-*.egg-info/
-
-# Env / secrets
-.env
-.env.local
-
-# Database (regenerate with scripts/import)
-data/banglamed.db
-data/banglamed.db-*
-*.sqlite3
-
-# Node
 node_modules/
 dist/
-.vite/
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Uploads
-data/uploads/
+*.db
+*.sqlite3
+.env
+data/import/
+data/*.db
+frontend/tsconfig.tsbuildinfo
+data/*.db-shm
+data/*.db-wal
