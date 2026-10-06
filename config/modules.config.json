@@ -1,0 +1,19 @@
+{
+  "core": true,
+  "auth": true,
+  "catalog": true,
+  "medicine_info": true,
+  "tests": true,
+  "prescriptions": true,
+  "safety": true,
+  "records": true,
+  "interpreter": true,
+  "cost": true,
+  "reminders": true,
+  "appointments": true,
+  "directory": true,
+  "facilities": true,
+  "doctor_workspace": true,
+  "hospital_analytics": true,
+  "admin": true
+}

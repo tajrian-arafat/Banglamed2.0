@@ -1,0 +1,7 @@
+{
+  "_note": "Configurable placeholders, NOT clinical guidance.",
+  "long_duration_days": 90,
+  "repeat_window_days": 30,
+  "age_bands": {"pediatric_max": 12, "geriatric_min": 65},
+  "severity": {"duplicate_ingredient": "critical", "duplicate_class": "warn", "interaction": "warn", "allergy": "critical", "pregnancy": "critical", "age": "info", "long_duration": "warn", "repeat": "info"}
+}

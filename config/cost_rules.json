@@ -1,0 +1,5 @@
+{
+  "countable_forms": ["tablet", "capsule", "suppository", "lozenge", "pill"],
+  "container_forms": ["syrup", "suspension", "solution", "cream", "gel", "ointment", "drop", "drops", "inhaler", "injection", "vial", "lotion", "shampoo", "spray", "powder", "sachet", "nasal drop", "eye drop", "ear drop", "nebuliser solution", "oral solution"],
+  "windows_days": [7, 30]
+}
