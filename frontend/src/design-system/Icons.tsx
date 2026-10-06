@@ -1,0 +1,32 @@
+// Inline SVG icon set (no external icon dependency).
+type P = { size?: number; className?: string };
+const base = (size = 18) => ({ width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round" as const, strokeLinejoin: "round" as const });
+
+export const IconSearch = ({ size, className }: P) => (<svg {...base(size)} className={className}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>);
+export const IconPill = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M10.5 20.5a5 5 0 0 1-7-7l7-7a5 5 0 0 1 7 7Z" /><path d="m8.5 8.5 7 7" /></svg>);
+export const IconFlask = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 18l-5-9V3" /><path d="M7 15h10" /></svg>);
+export const IconStethoscope = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M5 3v6a4 4 0 0 0 8 0V3" /><path d="M9 13v3a5 5 0 0 0 10 0v-2" /><circle cx="19" cy="11" r="2" /></svg>);
+export const IconHospital = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M3 21h18M5 21V7l7-4 7 4v14" /><path d="M12 9v6M9 12h6" /></svg>);
+export const IconUser = ({ size, className }: P) => (<svg {...base(size)} className={className}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>);
+export const IconShield = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M12 3 5 6v6c0 4.5 3 8 7 9 4-1 7-4.5 7-9V6Z" /><path d="m9 12 2 2 4-4" /></svg>);
+export const IconChart = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>);
+export const IconCalendar = ({ size, className }: P) => (<svg {...base(size)} className={className}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 11h18" /></svg>);
+export const IconBell = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6" /><path d="M10 20a2 2 0 0 0 4 0" /></svg>);
+export const IconFile = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" /><path d="M14 3v5h5" /></svg>);
+export const IconUpload = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M12 16V4M7 9l5-5 5 5" /><path d="M4 20h16" /></svg>);
+export const IconSun = ({ size, className }: P) => (<svg {...base(size)} className={className}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19" /></svg>);
+export const IconMoon = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z" /></svg>);
+export const IconGlobe = ({ size, className }: P) => (<svg {...base(size)} className={className}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z" /></svg>);
+export const IconArrowDown = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M12 5v14M6 13l6 6 6-6" /></svg>);
+export const IconArrowUp = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M12 19V5M6 11l6-6 6 6" /></svg>);
+export const IconPlus = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M12 5v14M5 12h14" /></svg>);
+export const IconTrash = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>);
+export const IconCheck = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="m5 13 4 4L19 7" /></svg>);
+export const IconAlert = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M12 3 2 20h20Z" /><path d="M12 9v5M12 17h.01" /></svg>);
+export const IconQr = ({ size, className }: P) => (<svg {...base(size)} className={className}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><path d="M14 14h3v3h-3zM20 14v3M14 20h6" /></svg>);
+export const IconLogout = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></svg>);
+export const IconMenu = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M3 6h18M3 12h18M3 18h18" /></svg>);
+export const IconX = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M6 6l12 12M18 6 6 18" /></svg>);
+export const IconActivity = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M3 12h4l2-7 4 14 2-7h6" /></svg>);
+export const IconDatabase = ({ size, className }: P) => (<svg {...base(size)} className={className}><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></svg>);
+export const IconSettings = ({ size, className }: P) => (<svg {...base(size)} className={className}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 15a1.6 1.6 0 0 0-1.5-1H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 3 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 9 3V3a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 15 4.6a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.6 1.6 0 0 0 21 9h.1a2 2 0 1 1 0 4H21a1.6 1.6 0 0 0-1.6 1Z" /></svg>);
