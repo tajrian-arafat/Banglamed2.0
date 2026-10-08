@@ -1,0 +1,50 @@
+# BanglaMed 2.0 — Render Blueprint
+#
+# FastAPI/uvicorn serves BOTH the JSON API and the built React SPA from the same
+# origin, so the frontend's relative `/api/*` calls work with no CORS setup.
+#
+# ── Why Docker ────────────────────────────────────────────────────────────────
+# The SPA is compiled in a Node build stage and copied into the Python runtime
+# (see ./Dockerfile), so the deploy is reproducible and the runtime image needs
+# no Node toolchain.
+#
+# ── Database persistence (the honest answer) ──────────────────────────────────
+# Render's free tier mounts NO persistent disk, so a database written at runtime
+# is destroyed on every deploy AND every restart (including a wake from sleep).
+# The catalog is therefore REBUILT from the original source data during the image
+# build, and re-asserted on every container start:
+#
+#   scripts/fetch_source_data.py  pulls the upstream datasets (~10 MB) from the
+#                                 project's permanent object-store URLs
+#   scripts/build_db.py           runs the full import + enrich + dedupe +
+#                                 text-fix + demo-seed pipeline (~40 s)
+#
+# Both are idempotent, so a start on a warm filesystem is a no-op and a start on
+# a cold one heals itself. Net effect: every fresh container comes up fully
+# populated (brands 25,405 · generics 1,653 · companies 223 · doctors 2,084 ·
+# hospitals 98 active · tests 108 · prescriptions 56 · users 5) with no data
+# committed to the repository.
+#
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# SECRET_KEY is generated once by Render and stored encrypted — never hardcoded,
+# never committed. DATABASE_URL is intentionally NOT set: `backend/app/core/config.py`
+# derives the path from its own location (`<repo_root>/data/banglamed.db`), which
+# is correct on Render and on a local checkout alike.
+services:
+  - type: web
+    name: banglamed2
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    branch: render-deploy
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: ENV
+        value: production
+      # Generated once by Render, stored encrypted. Never hardcoded.
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://banglamed2.onrender.com

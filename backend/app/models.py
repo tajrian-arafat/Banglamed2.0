@@ -306,6 +306,8 @@ class Hospital(Base, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(String(120), nullable=True)
     hours: Mapped[str | None] = mapped_column(String(200), nullable=True)
     about: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Number of doctors the source listing advertises for this facility.
+    listed_doctors: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(400), nullable=True)
     collected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

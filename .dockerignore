@@ -1,0 +1,27 @@
+# Keep the build context small and the image reproducible.
+.git
+.gitignore
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+
+# The catalog is rebuilt inside the image from the source data, so no database
+# (and no local backup of one) is ever copied in.
+data/*.db
+data/*.db-*
+data/*.bak_*
+data/import
+
+# The SPA is compiled in the Node stage and copied in explicitly.
+frontend/dist
+frontend/tsconfig.tsbuildinfo
+
+# Local-only artefacts.
+docs
+deploy
+*.tar.gz
+*.zip
+*.b64
+server_run*.sh
+tunnel_run*.sh

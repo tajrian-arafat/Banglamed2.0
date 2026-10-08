@@ -8,6 +8,7 @@ dist/
 .env
 data/import/
 data/*.db
-frontend/tsconfig.tsbuildinfo
 data/*.db-shm
 data/*.db-wal
+data/*.bak_*
+frontend/tsconfig.tsbuildinfo
