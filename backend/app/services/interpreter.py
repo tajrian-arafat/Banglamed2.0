@@ -46,6 +46,10 @@ settings = get_settings()
 _BRAND_INDEX_CACHE: dict[str, list[tuple]] | None = None
 _TEST_INDEX_CACHE: dict[str, tuple] | None = None
 
+# Hard ceiling on the long side of an image handed to Tesseract. Its memory use
+# scales with the pixel count, and Render's free instance has 512 MB total.
+MAX_OCR_PIXELS = 1500
+
 # --------------------------------------------------------------------- patterns
 DOSE_PATTERNS = [
     (r"1\s*[-+]\s*0\s*[-+]\s*1", {"morning": 1, "noon": 0, "evening": 0, "night": 1}),
@@ -149,12 +153,19 @@ def assess_quality(data: bytes) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------- preprocessing
-def preprocess_variants(data: bytes) -> list[tuple[str, Any]]:
-    """Return several OCR-ready renderings of the photo, best-effort.
+def preprocess_variants(data: bytes):
+    """Yield OCR-ready renderings of the photo, one at a time.
 
-    Each variant is a ``(label, PIL.Image)`` pair. The caller OCRs them and keeps
-    whichever produces the most catalog matches, so a photo that defeats one
-    normalisation still has a chance through another.
+    A **generator**, not a list: each variant is a full-size grayscale image, and
+    holding all of them at once (plus Tesseract's own working set) is what pushed
+    Render's 512 MB free instance into an OOM kill — the container died mid-upload
+    and every request 502'd until it restarted. Yielding lets the caller drop each
+    image before the next is built.
+
+    The long side is capped at ``MAX_OCR_PIXELS``: Tesseract's memory use grows
+    with the pixel count, and a 12 MP phone photo upscaled to 1800px was the
+    single biggest allocation in the request. 1500px is still ~30px of glyph
+    height for a prescription, which is what the engine actually needs.
     """
     from PIL import Image, ImageFilter, ImageOps
 
@@ -162,27 +173,35 @@ def preprocess_variants(data: bytes) -> list[tuple[str, Any]]:
     if img.mode not in ("L", "RGB"):
         img = img.convert("RGB")
     g = img.convert("L")
+    img.close()
 
     w, h = g.size
-    # Upscale small photos: Tesseract wants roughly 30px of glyph height, and a
-    # 600px-wide phone crop simply does not have it.
-    if max(w, h) < 1800:
-        scale = 1800 / max(w, h)
+    # Upscale small photos (Tesseract wants ~30px of glyph height) but never
+    # beyond the cap, and always downscale an oversized one.
+    if max(w, h) < 1500:
+        scale = 1500 / max(w, h)
+        g = g.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+    elif max(w, h) > MAX_OCR_PIXELS:
+        scale = MAX_OCR_PIXELS / max(w, h)
         g = g.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
 
-    variants: list[tuple[str, Any]] = []
-
-    # 1. Autocontrast + unsharp: fixes the over-exposed white-page case.
+    # 1. Autocontrast: fixes the over-exposed white-page case.
     ac = ImageOps.autocontrast(g, cutoff=1)
-    variants.append(("autocontrast", ac))
-    variants.append(("sharpened", ac.filter(ImageFilter.UnsharpMask(radius=2, percent=160, threshold=3))))
+    g.close()
+    yield "autocontrast", ac
 
-    # 2. Locally binarised: helps faint pencil / low-contrast print.
+    # 2. Sharpened: helps faint print. `filter` returns a NEW image, so `ac` can
+    #    be released as soon as this one exists.
+    sharp = ac.filter(ImageFilter.UnsharpMask(radius=2, percent=160, threshold=3))
+    yield "sharpened", sharp
+    ac.close()
+
+    # 3. Locally binarised: helps low-contrast / pencil. Built from `sharp`, then
+    #    released, so at most two large images are ever alive at once.
     try:
         import numpy as np
 
-        arr = np.asarray(ac, dtype=np.float32)
-        # Box-blur the image to get a local mean, then threshold against it.
+        arr = np.asarray(sharp, dtype=np.float32)
         k = max(15, (min(arr.shape) // 25) | 1)
         pad = k // 2
         padded = np.pad(arr, pad, mode="edge")
@@ -192,12 +211,13 @@ def preprocess_variants(data: bytes) -> list[tuple[str, Any]]:
             csum[k:, k:] - csum[:-k, k:] - csum[k:, :-k] + csum[:-k, :-k]
         ) / float(k * k)
         binary = np.where(arr > local - 6, 255, 0).astype("uint8")
-        variants.append(("binarised", Image.fromarray(binary)))
+        del arr, padded, csum, local
+        yield "binarised", Image.fromarray(binary)
     except Exception:
         # numpy is optional; the two variants above are enough to be useful.
         pass
-
-    return variants
+    finally:
+        sharp.close()
 
 
 # ------------------------------------------------------------------------ OCR
@@ -277,6 +297,9 @@ def ocr_text(data: bytes) -> tuple[str | None, str]:
 
     if provider in ("auto", "tesseract", "gemini"):
         # Try every preprocessing variant and keep the richest transcription.
+        # The generator owns each image and releases it before building the next,
+        # so peak memory stays flat (see preprocess_variants) — the caller must
+        # NOT close them, or the generator's next step operates on a dead image.
         best: str | None = None
         for _label, img in preprocess_variants(data):
             txt = _tesseract_text(img)
