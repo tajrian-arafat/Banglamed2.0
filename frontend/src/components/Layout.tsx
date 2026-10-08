@@ -69,7 +69,7 @@ export function Layout({ children }: { children: ReactNode }) {
               ))}
             </div>
             <div className="spacer" />
-            <button className="btn btn-icon btn-ghost" onClick={() => setLang(lang === "en" ? "bn" : "en")} title="Language">
+            <button className="btn btn-icon btn-ghost nav-lang" onClick={() => setLang(lang === "en" ? "bn" : "en")} title="Language">
               <IconGlobe size={17} />
             </button>
             <button className="btn btn-icon btn-ghost" onClick={toggle} title="Theme">
@@ -84,7 +84,7 @@ export function Layout({ children }: { children: ReactNode }) {
               </div>
             ) : (
               <div className="row" style={{ gap: 8 }}>
-                <Link to="/login" className="btn btn-sm btn-ghost">{t("nav.login")}</Link>
+                <Link to="/login" className="btn btn-sm btn-ghost auth-login">{t("nav.login")}</Link>
                 <Link to="/register" className="btn btn-sm btn-primary">{t("nav.register")}</Link>
               </div>
             )}

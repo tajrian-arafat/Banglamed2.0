@@ -7,7 +7,7 @@ import { Loading, ErrorState } from "../design-system/UI";
 interface D {
   id: number; doctor_code: string; name: string; speciality: string | null; qualifications: string | null;
   designation: string | null; bmdc_no: string | null; district: string | null; city: string | null;
-  affiliations: { hospital_id: number; room: string | null; fee: number | null }[];
+  affiliations: { hospital_id: number; hospital: string | null; room: string | null; fee: number | null }[];
   schedules: { id: number; date: string; total_serials: number; session_start: string | null; session_end: string | null; fee: number | null }[];
 }
 
@@ -37,10 +37,13 @@ export default function DoctorDetail() {
           <h3 style={{ marginTop: 0 }}>Chambers</h3>
           {d.affiliations.length === 0 && <div className="muted small">No chamber information recorded.</div>}
           {d.affiliations.map((a, i) => (
-            <div key={i} className="list-row">
-              <div><div className="name">Hospital #{a.hospital_id}</div><div className="tiny muted">{a.room || "—"}</div></div>
+            <Link key={i} to={`/hospitals/${a.hospital_id}`} className="list-row">
+              <div>
+                <div className="name">{a.hospital || `Hospital #${a.hospital_id}`}</div>
+                {a.room && <div className="tiny muted">{a.room}</div>}
+              </div>
               {a.fee != null && <span className="badge badge-accent">{bdt(a.fee)}</span>}
-            </div>
+            </Link>
           ))}
         </div>
         <div className="glass card">

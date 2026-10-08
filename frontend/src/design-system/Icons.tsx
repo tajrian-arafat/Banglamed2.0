@@ -3,6 +3,7 @@ type P = { size?: number; className?: string };
 const base = (size = 18) => ({ width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round" as const, strokeLinejoin: "round" as const });
 
 export const IconSearch = ({ size, className }: P) => (<svg {...base(size)} className={className}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>);
+export const IconMapPin = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z" /><circle cx="12" cy="10" r="2.5" /></svg>);
 export const IconPill = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M10.5 20.5a5 5 0 0 1-7-7l7-7a5 5 0 0 1 7 7Z" /><path d="m8.5 8.5 7 7" /></svg>);
 export const IconFlask = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 18l-5-9V3" /><path d="M7 15h10" /></svg>);
 export const IconStethoscope = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M5 3v6a4 4 0 0 0 8 0V3" /><path d="M9 13v3a5 5 0 0 0 10 0v-2" /><circle cx="19" cy="11" r="2" /></svg>);

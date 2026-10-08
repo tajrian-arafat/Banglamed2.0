@@ -4,14 +4,18 @@ import { api } from "../core/api";
 import { Loading, Empty, ErrorState } from "../design-system/UI";
 import { IconHospital, IconSearch } from "../design-system/Icons";
 
-interface H { id: number; name: string; district: string | null; address: string | null; phone: string | null; hours: string | null; }
+interface H { id: number; name: string; district: string | null; address: string | null; phone: string | null; hours: string | null; listed_doctors: number | null; }
+
+const TARGET = 48;
 
 export default function Hospitals() {
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<H[]>([]);
   const [total, setTotal] = useState(0);
   const [allTotal, setAllTotal] = useState<number | null>(null);
+  const [limit, setLimit] = useState(TARGET);
   const [loading, setLoading] = useState(true);
+  const [more, setMore] = useState(false);
   const [err, setErr] = useState("");
   const [reload, setReload] = useState(0);
 
@@ -26,16 +30,17 @@ export default function Hospitals() {
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
     setErr("");
+    if (rows.length === 0) setLoading(true);
     const t = setTimeout(() => {
-      api.get<{ total: number; results: H[] }>(`/api/directory/hospitals?q=${encodeURIComponent(q)}&limit=48`)
+      api.get<{ total: number; results: H[] }>(`/api/directory/hospitals?q=${encodeURIComponent(q)}&limit=${limit}`)
         .then((r) => { if (alive) { setRows(r.results); setTotal(r.total); } })
         .catch((e) => { if (alive) { setRows([]); setTotal(0); setErr(e.message || "Could not load hospitals"); } })
-        .finally(() => { if (alive) setLoading(false); });
+        .finally(() => { if (alive) { setLoading(false); setMore(false); } });
     }, 200);
     return () => { alive = false; clearTimeout(t); };
-  }, [q, reload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, limit, reload]);
 
   const retry = useCallback(() => setReload((n) => n + 1), []);
   const filtering = q.trim().length > 0;
@@ -48,7 +53,7 @@ export default function Hospitals() {
       </p>
       <div className="search-hero" style={{ maxWidth: 640, marginBottom: 20 }}>
         <span className="search-icon"><IconSearch size={20} /></span>
-        <input className="search-input" placeholder="Search a hospital or clinic…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="search-input" placeholder="Search a hospital or clinic…" value={q} onChange={(e) => { setQ(e.target.value); setLimit(TARGET); }} />
       </div>
 
       {loading ? <Loading /> : err ? (
@@ -58,11 +63,13 @@ export default function Hospitals() {
           icon={<IconHospital size={30} />}
           title={filtering ? "No facilities match your search" : "No facilities found"}
           hint={filtering ? "Try a different search term." : "The directory is empty."}
-          action={filtering ? <button className="btn btn-sm" onClick={() => setQ("")}>Clear search</button> : undefined}
+          action={filtering ? <button className="btn btn-sm" onClick={() => { setQ(""); setLimit(TARGET); }}>Clear search</button> : undefined}
         />
       ) : (
         <>
-          {filtering && <div className="muted small" style={{ marginBottom: 10 }}>{total.toLocaleString()} result{total === 1 ? "" : "s"}</div>}
+          <div className="muted small" style={{ marginBottom: 10 }}>
+            Showing {rows.length.toLocaleString()} of {total.toLocaleString()} facilit{total === 1 ? "y" : "ies"}
+          </div>
           <div className="grid grid-3">
             {rows.map((h) => (
               <Link key={h.id} to={`/hospitals/${h.id}`} className="glass card med-card">
@@ -70,9 +77,19 @@ export default function Hospitals() {
                 <div className="muted small" style={{ marginTop: 6 }}>{h.district || "—"}</div>
                 <div className="tiny muted" style={{ marginTop: 4 }}>{h.address || ""}</div>
                 {h.phone && <div className="tiny muted">{h.phone}</div>}
+                {h.listed_doctors != null && h.listed_doctors > 0 && (
+                  <div className="tiny muted" style={{ marginTop: 4 }}>{h.listed_doctors} doctors listed</div>
+                )}
               </Link>
             ))}
           </div>
+          {rows.length < total && (
+            <div style={{ textAlign: "center", marginTop: 22 }}>
+              <button className="btn btn-primary" disabled={more} onClick={() => { setMore(true); setLimit((l) => l + TARGET); }}>
+                {more ? "Loading…" : `Load more (${(total - rows.length).toLocaleString()} remaining)`}
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>
