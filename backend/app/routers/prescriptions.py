@@ -615,7 +615,7 @@ def _render_print_html(d: dict, qr_b64: str, scan_url: str) -> str:
 
   <div class="meta">
     <div class="box"><div class="k">Patient</div><b>{esc(pat.get('full_name'))}</b><div class="muted">{esc(pat.get('patient_code'))}</div></div>
-    <div class="box"><div class="k">Date of birth / Sex</div><b>{esc(pat.get('dob') or '\u2014')}</b><div class="muted">{esc(pat.get('sex'))}</div></div>
+    <div class="box"><div class="k">Date of birth / Sex</div><b>{esc(pat.get('dob') or '&#8212;')}</b><div class="muted">{esc(pat.get('sex'))}</div></div>
     <div class="box"><div class="k">Rx No.</div><b>{esc(d.get('rx_code'))}</b><div class="muted">{esc((d.get('issued_at') or '')[:10])}</div></div>
   </div>
 
