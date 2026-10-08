@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import models as M
@@ -217,3 +217,78 @@ def _text_mentions(text: str, needle: str) -> bool:
         if len(token) >= 5 and token in text.lower():
             return True
     return False
+
+
+# --------------------------------------------------------------- panel detail
+# The guards above answer "is anything wrong?". The two helpers below answer the
+# doctor's follow-up questions — "what are this medicine's side effects?" and
+# "do these two interact?" — so the Safety panel can show the detail, not just a
+# pass/fail. Both read the existing catalogue (brand + generic content); nothing
+# is invented, and a medicine with no recorded text yields an empty string so the
+# UI can say "none recorded" rather than showing a blank.
+def _clean(text: str | None, limit: int = 420) -> str:
+    """Strip markup/entities and collapse whitespace for display."""
+    if not text:
+        return ""
+    t = re.sub(r"<[^>]+>", " ", text)
+    t = t.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:limit] + ("…" if len(t) > limit else "")
+
+
+def side_effects_for(db: Session, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per-medicine side effects, from the generic content then the brand row."""
+    out: list[dict[str, Any]] = []
+    for it in items:
+        gid = it.get("generic_id")
+        brand_id = it.get("brand_id")
+        gen = db.get(M.Generic, gid) if gid else None
+        text = _generic_section(db, gid, "side_effects") if gid else None
+        if not text and brand_id:
+            brand = db.get(M.Brand, brand_id)
+            text = brand.side_effects if brand else None
+        name = it.get("name") or (gen.name if gen else "Medicine")
+        out.append({"name": name, "text": _clean(text)})
+    return out
+
+
+def interactions_for(db: Session, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pairwise interactions between the prescribed medicines.
+
+    Curated rules (``interactions_curated``) win; otherwise the generic
+    interaction text is scanned for a mention of the other medicine, which is the
+    same signal the guard uses.
+    """
+    resolved: list[tuple[str, M.Generic | None]] = []
+    for it in items:
+        gid = it.get("generic_id")
+        gen = db.get(M.Generic, gid) if gid else None
+        resolved.append((it.get("name") or (gen.name if gen else "Medicine"), gen))
+
+    out: list[dict[str, Any]] = []
+    for i, (na, ga) in enumerate(resolved):
+        for nb, gb in resolved[i + 1:]:
+            if not ga or not gb:
+                continue
+            cur = db.scalar(
+                select(M.InteractionCurated).where(
+                    or_(
+                        and_(func.lower(M.InteractionCurated.generic_a) == ga.name.lower(),
+                             func.lower(M.InteractionCurated.generic_b) == gb.name.lower()),
+                        and_(func.lower(M.InteractionCurated.generic_a) == gb.name.lower(),
+                             func.lower(M.InteractionCurated.generic_b) == ga.name.lower()),
+                    )
+                )
+            )
+            if cur:
+                out.append({"a": na, "b": nb, "severity": cur.severity or "warn",
+                            "note": _clean(cur.note) or f"Recorded interaction between {ga.name} and {gb.name}."})
+                continue
+            a_inter = _generic_section(db, ga.id, "interaction") or ""
+            b_inter = _generic_section(db, gb.id, "interaction") or ""
+            a_text = (ga.name or "") + " " + (ga.therapeutic_class or "")
+            b_text = (gb.name or "") + " " + (gb.therapeutic_class or "")
+            if _text_mentions(a_inter, b_text) or _text_mentions(b_inter, a_text):
+                out.append({"a": na, "b": nb, "severity": _sev("interaction"),
+                            "note": f"Possible interaction between {ga.name} and {gb.name} (from the medicine database)."})
+    return out
