@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[3]  # repo root
 CONFIG_DIR = BASE_DIR / "config"
-DATA_DIR = BASE_DIR / "data"
+
+# Where the SQLite catalog lives. Defaults to <repo>/data, but honours
+# BANGLAMED_DATA_DIR so a host that offers a persistent mount (e.g. Render's
+# /var/data) can point the database at disk that survives a redeploy. Without a
+# mount the default keeps the previous behaviour: rebuild on a cold start.
+DATA_DIR = Path(os.environ.get("BANGLAMED_DATA_DIR") or (BASE_DIR / "data"))
 
 
 class Settings(BaseSettings):
@@ -37,6 +43,26 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.env.strip().lower() in ("production", "prod")
+
+    def assert_production_secrets(self) -> None:
+        """Refuse to boot in production with the shipped development secret.
+
+        ``SECRET_KEY`` is what signs JWTs and the prescription seal, so a default
+        value in production would let anyone forge a token. Failing loudly at
+        startup is the only safe behaviour — a silently insecure deployment is
+        worse than one that does not come up.
+        """
+        if self.is_production and self.secret_key in ("", "dev-insecure-change-me"):
+            raise RuntimeError(
+                "SECRET_KEY must be set to a strong random value when ENV=production. "
+                "Refusing to start with the development default."
+            )
+        if self.is_production and len(self.secret_key) < 32:
+            raise RuntimeError("SECRET_KEY must be at least 32 characters in production.")
 
 
 @lru_cache

@@ -1,6 +1,7 @@
 """Password hashing, JWT tokens and the prescription digital seal (HMAC)."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -22,6 +23,32 @@ def _pw_bytes(password: str) -> bytes:
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(_pw_bytes(password), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+# bcrypt's own base64 alphabet (NOT standard base64) — the salt must use it or
+# the library rejects it with "Invalid salt".
+_BCRYPT_B64 = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+    "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+)
+_DEMO_SALT_SCOPE = "banglamed-demo-salt::"
+
+
+def demo_password_hash(username: str, password: str) -> str:
+    """Deterministic bcrypt hash, for the SEEDED demo accounts only.
+
+    ``gensalt()`` is random, so seeding the same demo account twice produced two
+    different hashes and the rebuilt catalog never matched byte-for-byte. These
+    accounts are seeded *data*, so the salt is derived from the username: same
+    input, same hash, on every build and every redeploy. Nothing is hardcoded in
+    the repository — the salt is computed, not stored.
+
+    Real users registering through the API still go through ``hash_password()``,
+    which keeps its random per-account salt.
+    """
+    raw = hashlib.sha256((_DEMO_SALT_SCOPE + username).encode("utf-8")).digest()[:16]
+    salt = "$2b$12$" + base64.b64encode(raw).decode().translate(_BCRYPT_B64).rstrip("=")
+    return bcrypt.hashpw(_pw_bytes(password), salt.encode("utf-8")).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:

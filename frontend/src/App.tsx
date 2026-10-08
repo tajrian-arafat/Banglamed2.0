@@ -14,6 +14,7 @@ import DoctorDetail from "./pages/DoctorDetail";
 import Hospitals from "./pages/Hospitals";
 import HospitalDetail from "./pages/HospitalDetail";
 import RxPublic from "./pages/RxPublic";
+import RxScan from "./pages/RxScan";
 import PatientDashboard from "./pages/patient/Dashboard";
 import PatientHistory from "./pages/patient/History";
 import PatientUpload from "./pages/patient/Upload";
@@ -55,6 +56,9 @@ export default function App() {
         <Route path="/hospitals" element={<Hospitals />} />
         <Route path="/hospitals/:id" element={<HospitalDetail />} />
         <Route path="/rx/:token" element={<RxPublic />} />
+        {/* Reached by scanning the QR printed on a prescription: shows the
+            prescribed medicines/tests with prices plus a price search. */}
+        <Route path="/scan/:token" element={<RxScan />} />
 
         <Route path="/patient" element={<Guard roles={["patient"]}><PatientDashboard /></Guard>} />
         <Route path="/patient/history" element={<Guard roles={["patient"]}><PatientHistory /></Guard>} />

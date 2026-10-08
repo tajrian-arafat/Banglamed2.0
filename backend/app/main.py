@@ -25,12 +25,15 @@ from .routers import (
     interpreter,
     patients,
     prescriptions,
+    prices,
     records,
     reminders,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 settings = get_settings()
+# Fail fast rather than serve with a forgeable signing key.
+settings.assert_production_secrets()
 
 # ---- module registry (SPEC 3.2) -------------------------------------------
 register_module(ModuleSpec("core", "Core", nav=[], permissions=[]))
@@ -62,7 +65,11 @@ register_module(ModuleSpec("hospital_analytics", "Hospital Analytics", requires=
 register_module(ModuleSpec("admin", "System Admin", requires=["core"], permissions=["admin"],
                            nav=[{"label": "Admin", "path": "/admin", "roles": ["system_admin"]}]))
 
-app = FastAPI(title="BanglaMed API", version="2.0.0", docs_url="/api/docs", openapi_url="/api/openapi.json")
+# The interactive docs and the OpenAPI schema are development aids; leaving them
+# on in production hands an attacker a complete map of the API surface.
+_DOCS = None if settings.is_production else "/api/docs"
+_OPENAPI = None if settings.is_production else "/api/openapi.json"
+app = FastAPI(title="BanglaMed API", version="2.0.0", docs_url=_DOCS, openapi_url=_OPENAPI)
 
 app.add_middleware(
     CORSMiddleware,
@@ -109,12 +116,101 @@ def health():
     return {"status": "ok", "app": settings.app_name, "version": "2.0.0", "env": settings.env}
 
 
+@app.get("/api/health/state")
+def health_state():
+    """Dataset fingerprint, for proving the data survives a redeploy.
+
+    Returns counts plus two digests (see app/services/statefp.py):
+      * ``state_sha256``       — every table, every column
+      * ``persistence_sha256`` — catalog + seeded data only
+
+    Take a reading before a deploy and another afterwards: an unchanged
+    ``persistence_sha256`` is proof the data came back identical, not merely that
+    the row counts happen to match. Counts and hashes only — no row contents.
+    """
+    from .core.config import get_settings as _gs
+    from .services import statefp
+
+    db = _gs().database_url.replace("sqlite:///", "").replace("sqlite://", "")
+    full = statefp.fingerprint(db)
+    stable = statefp.stable_fingerprint(db)
+    counts = {k: v["rows"] for k, v in sorted(full["tables"].items())}
+    # Convenience aliases the deployment checks are phrased in terms of.
+    counts["hospitals_active"] = _active_hospitals()
+    return {
+        "status": "ok",
+        "integrity_check": full["integrity_check"],
+        "table_count": full["table_count"],
+        "total_rows": full["total_rows"],
+        "state_sha256": full["state_sha256"],
+        "persistence_sha256": stable["persistence_sha256"],
+        "persistence_scope": stable["scope"],
+        "persistence_rows": stable["total_rows"],
+        "counts": counts,
+    }
+
+
+def _active_hospitals() -> int:
+    """Hospitals the source did not flag as rejected/duplicate (the 98 figure)."""
+    from sqlalchemy import func, select
+
+    from . import models as M
+    from .core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return int(db.scalar(
+            select(func.count()).select_from(M.Hospital)
+            .where(func.coalesce(M.Hospital.data_status, "").notin_(("rejected", "duplicate")))
+        ) or 0)
+    finally:
+        db.close()
+
+
+@app.get("/api/health/data")
+def health_data():
+    """Aggregate row counts, so a deployment can be verified from outside.
+
+    Counts only — no row contents, no identifiers. Exposed deliberately so
+    "is the database actually populated?" is answerable without shell access.
+    """
+    from sqlalchemy import func, select
+
+    from . import models as M
+    from .core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        def c(model):
+            return int(db.scalar(select(func.count()).select_from(model)) or 0)
+
+        active_hospitals = int(db.scalar(
+            select(func.count()).select_from(M.Hospital)
+            .where(func.coalesce(M.Hospital.data_status, "").notin_(("rejected", "duplicate")))
+        ) or 0)
+        return {
+            "status": "ok",
+            "counts": {
+                "brands": c(M.Brand), "generics": c(M.Generic), "companies": c(M.Company),
+                "indications": c(M.Indication), "drug_classes": c(M.DrugClass),
+                "dosage_forms": c(M.DosageForm), "doctors": c(M.Doctor),
+                "hospitals": c(M.Hospital), "hospitals_active": active_hospitals,
+                "tests": c(M.LabTest), "prescriptions": c(M.Prescription),
+                "prescription_versions": c(M.PrescriptionVersion),
+                "users": c(M.User), "medicine_fts": c(M.MedicineFts),
+            },
+        }
+    finally:
+        db.close()
+
+
 @app.get("/api/modules")
 def modules_public():
     return module_manifest()
 
 
-for r in (auth, catalog, patients, prescriptions, cost, records, interpreter, reminders, appointments, doctor_workspace, analytics, admin):
+for r in (auth, catalog, patients, prescriptions, prices, cost, records, interpreter,
+          reminders, appointments, doctor_workspace, analytics, admin):
     app.include_router(r.router)
 
 # ---- serve the built SPA (if present) -------------------------------------

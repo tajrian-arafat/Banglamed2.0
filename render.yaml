@@ -3,33 +3,52 @@
 # FastAPI/uvicorn serves BOTH the JSON API and the built React SPA from the same
 # origin, so the frontend's relative `/api/*` calls work with no CORS setup.
 #
-# ── Why Docker ────────────────────────────────────────────────────────────────
+# ── Why Docker ───────────────────────────────────────────────────────────────
 # The SPA is compiled in a Node build stage and copied into the Python runtime
 # (see ./Dockerfile), so the deploy is reproducible and the runtime image needs
 # no Node toolchain.
 #
-# ── Database persistence (the honest answer) ──────────────────────────────────
+# ── Database persistence (the honest answer) ─────────────────────────────────
 # Render's free tier mounts NO persistent disk, so a database written at runtime
 # is destroyed on every deploy AND every restart (including a wake from sleep).
-# The catalog is therefore REBUILT from the original source data during the image
-# build, and re-asserted on every container start:
 #
-#   scripts/fetch_source_data.py  pulls the upstream datasets (~10 MB) from the
-#                                 project's permanent object-store URLs
-#   scripts/build_db.py           runs the full import + enrich + dedupe +
-#                                 text-fix + demo-seed pipeline (~40 s)
+# The catalog is therefore REBUILT FROM SOURCE, deterministically, during the
+# image build and again on every container start. "Deterministically" is the part
+# that matters and is not hand-waving:
 #
-# Both are idempotent, so a start on a warm filesystem is a no-op and a start on
-# a cold one heals itself. Net effect: every fresh container comes up fully
-# populated (brands 25,405 · generics 1,653 · companies 223 · doctors 2,084 ·
-# hospitals 98 active · tests 108 · prescriptions 56 · users 5) with no data
-# committed to the repository.
+#   * scripts/render_pipeline.sh exports BANGLAMED_BUILD_EPOCH, so every catalog
+#     timestamp (created_at/updated_at/collected_at/finished_at/issued_at) resolves
+#     to ONE fixed instant instead of the wall clock, and the seeded demo history
+#     mints identical rx_code / public_token values from stable keys.
+#   * scripts/state_fingerprint.py hashes the whole dataset (per-table count +
+#     order-independent row digest over selected columns).
 #
-# ── Secrets ───────────────────────────────────────────────────────────────────
+# Verified locally: two independent rebuilds from a deleted database produce the
+# SAME state_sha256 and identical per-table digests. The database after a
+# redeploy is therefore provably the database before it, not merely "the same
+# counts". Re-run the same comparison against the live service with
+# scripts/verify_persistence.py.
+#
+# ── Upgrading to a real persistent disk ──────────────────────────────────────
+# On a paid instance, uncomment the `disk:` block below AND the
+# BANGLAMED_DATA_DIR env var. `backend/app/core/config.py` resolves the database
+# from that variable, and scripts/render_pipeline.sh creates the directory, so
+# attaching a disk needs NO code change: the rebuild then becomes a one-time seed
+# because the file is on durable storage.
+#
+#   disk:
+#     name: banglamed-data
+#     mountPath: /var/data
+#     sizeGB: 1
+#   - key: BANGLAMED_DATA_DIR
+#     value: /var/data
+#
+# ── Secrets ──────────────────────────────────────────────────────────────────
 # SECRET_KEY is generated once by Render and stored encrypted — never hardcoded,
-# never committed. DATABASE_URL is intentionally NOT set: `backend/app/core/config.py`
-# derives the path from its own location (`<repo_root>/data/banglamed.db`), which
-# is correct on Render and on a local checkout alike.
+# never committed. `backend/app/core/config.py` refuses to boot with
+# ENV=production unless SECRET_KEY is set and at least 32 characters.
+# DATABASE_URL is intentionally NOT set: config.py derives the path from its own
+# location (<repo_root>/data/banglamed.db), correct on Render and locally alike.
 services:
   - type: web
     name: banglamed2
@@ -46,5 +65,6 @@ services:
       # Generated once by Render, stored encrypted. Never hardcoded.
       - key: SECRET_KEY
         generateValue: true
+      # Widen this if you add a custom domain.
       - key: CORS_ORIGINS
         value: https://banglamed2.onrender.com

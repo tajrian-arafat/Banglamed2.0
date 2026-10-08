@@ -14,6 +14,7 @@ export const IconChart = ({ size, className }: P) => (<svg {...base(size)} class
 export const IconCalendar = ({ size, className }: P) => (<svg {...base(size)} className={className}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 11h18" /></svg>);
 export const IconBell = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6" /><path d="M10 20a2 2 0 0 0 4 0" /></svg>);
 export const IconFile = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" /><path d="M14 3v5h5" /></svg>);
+export const IconPrinter = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M6 9V3h12v6" /><rect x="3" y="9" width="18" height="8" rx="2" /><path d="M6 15h12v6H6z" /></svg>);
 export const IconUpload = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M12 16V4M7 9l5-5 5 5" /><path d="M4 20h16" /></svg>);
 export const IconSun = ({ size, className }: P) => (<svg {...base(size)} className={className}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19" /></svg>);
 export const IconMoon = ({ size, className }: P) => (<svg {...base(size)} className={className}><path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z" /></svg>);
