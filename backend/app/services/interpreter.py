@@ -48,7 +48,24 @@ _TEST_INDEX_CACHE: dict[str, tuple] | None = None
 
 # Hard ceiling on the long side of an image handed to Tesseract. Its memory use
 # scales with the pixel count, and Render's free instance has 512 MB total.
-MAX_OCR_PIXELS = 1500
+#
+# NOTE: pytesseract runs the `tesseract` BINARY as a subprocess, so its memory is
+# NOT part of this process's RSS — a 1500px image could push the subprocess past
+# the container limit even though Python itself looked small. 1200px keeps the
+# subprocess comfortably inside the free tier while still giving ~30px of glyph
+# height, which is what the engine needs.
+MAX_OCR_PIXELS = 1200
+
+# How many preprocessing variants may be OCR'd. Each one is a `tesseract`
+# subprocess, and the subprocess footprint is what the 512 MB container limit
+# constrains, so this is a hard cap rather than "try everything".
+MAX_OCR_PASSES = 2
+
+# Tesseract is multi-threaded by default and each worker thread allocates its own
+# scratch buffers. One thread is plenty for a single page and roughly halves the
+# subprocess footprint.
+import os as _os
+_os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
 # --------------------------------------------------------------------- patterns
 DOSE_PATTERNS = [
@@ -162,10 +179,10 @@ def preprocess_variants(data: bytes):
     and every request 502'd until it restarted. Yielding lets the caller drop each
     image before the next is built.
 
-    The long side is capped at ``MAX_OCR_PIXELS``: Tesseract's memory use grows
-    with the pixel count, and a 12 MP phone photo upscaled to 1800px was the
-    single biggest allocation in the request. 1500px is still ~30px of glyph
-    height for a prescription, which is what the engine actually needs.
+    Only TWO variants are produced, and the caller stops at the first that yields
+    text. Each variant costs a `tesseract` subprocess spawn, and the subprocess —
+    not this process — is what the container limit actually constrains, so the
+    number of passes matters as much as the image size.
     """
     from PIL import Image, ImageFilter, ImageOps
 
@@ -178,46 +195,25 @@ def preprocess_variants(data: bytes):
     w, h = g.size
     # Upscale small photos (Tesseract wants ~30px of glyph height) but never
     # beyond the cap, and always downscale an oversized one.
-    if max(w, h) < 1500:
-        scale = 1500 / max(w, h)
+    if max(w, h) < 1200:
+        scale = 1200 / max(w, h)
         g = g.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
     elif max(w, h) > MAX_OCR_PIXELS:
         scale = MAX_OCR_PIXELS / max(w, h)
         g = g.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
 
-    # 1. Autocontrast: fixes the over-exposed white-page case.
+    # 1. Autocontrast: fixes the over-exposed white-page case, which is the
+    #    common phone-photo failure. This alone reads most prescriptions.
     ac = ImageOps.autocontrast(g, cutoff=1)
     g.close()
     yield "autocontrast", ac
 
-    # 2. Sharpened: helps faint print. `filter` returns a NEW image, so `ac` can
-    #    be released as soon as this one exists.
+    # 2. Sharpened: the fallback for faint print. `filter` returns a NEW image,
+    #    so `ac` is released as soon as this one exists.
     sharp = ac.filter(ImageFilter.UnsharpMask(radius=2, percent=160, threshold=3))
     yield "sharpened", sharp
     ac.close()
-
-    # 3. Locally binarised: helps low-contrast / pencil. Built from `sharp`, then
-    #    released, so at most two large images are ever alive at once.
-    try:
-        import numpy as np
-
-        arr = np.asarray(sharp, dtype=np.float32)
-        k = max(15, (min(arr.shape) // 25) | 1)
-        pad = k // 2
-        padded = np.pad(arr, pad, mode="edge")
-        csum = padded.cumsum(0).cumsum(1)
-        csum = np.pad(csum, ((1, 0), (1, 0)))
-        local = (
-            csum[k:, k:] - csum[:-k, k:] - csum[k:, :-k] + csum[:-k, :-k]
-        ) / float(k * k)
-        binary = np.where(arr > local - 6, 255, 0).astype("uint8")
-        del arr, padded, csum, local
-        yield "binarised", Image.fromarray(binary)
-    except Exception:
-        # numpy is optional; the two variants above are enough to be useful.
-        pass
-    finally:
-        sharp.close()
+    sharp.close()
 
 
 # ------------------------------------------------------------------------ OCR
@@ -225,17 +221,16 @@ def _tesseract_text(img: Any) -> str | None:
     try:
         import pytesseract  # type: ignore
 
-        # psm 6 = "assume a single uniform block of text", which is what a
-        # prescription body is; psm 4 handles the multi-column pad layout.
-        best = ""
-        for psm in (6, 4):
-            try:
-                txt = pytesseract.image_to_string(img, lang="eng", config=f"--oem 3 --psm {psm}")
-            except Exception:
-                continue
-            if len(txt.strip()) > len(best.strip()):
-                best = txt
-        return best or None
+        # A single pass. psm 6 = "assume a single uniform block of text", which is
+        # what a prescription body is. Running psm 4 as well doubled the number of
+        # `tesseract` subprocess spawns, and the subprocess is what the container
+        # memory limit constrains — one pass is the difference between a 200 and a
+        # 502 on the free tier.
+        try:
+            txt = pytesseract.image_to_string(img, lang="eng", config="--oem 3 --psm 6")
+        except Exception:
+            return None
+        return txt or None
     except Exception:
         return None
 
@@ -275,7 +270,7 @@ def _gemini_text(data: bytes) -> str | None:
         return None
 
 
-def ocr_text(data: bytes) -> tuple[str | None, str]:
+def ocr_text(data: bytes, score=None) -> tuple[str | None, str]:
     """Return ``(text, provider)``. ``provider`` is ``"none"`` when nothing ran.
 
     ``null``/empty/``auto`` all mean "use whatever is available": Gemini when a
@@ -283,6 +278,13 @@ def ocr_text(data: bytes) -> tuple[str | None, str]:
     ``off``/``disabled`` turns reading off — the old behaviour, where the shipped
     ``OCR_PROVIDER=null`` silently disabled reading for every upload, is exactly
     the bug this feature exists to fix.
+
+    ``score`` is an optional ``callable(text) -> int`` used to pick between
+    preprocessing variants. Stopping at the first variant that returns *any* text
+    is too eager — a sharpened pass can return a few stray characters and win over
+    the autocontrast pass that actually read the drug names. The caller passes a
+    scorer (how many catalog entries the text matches) so the best variant wins,
+    while still capping the number of `tesseract` subprocess spawns.
     """
     provider = (settings.ocr_provider or "auto").strip().lower()
     if provider in ("", "null", "none", "auto"):
@@ -296,15 +298,20 @@ def ocr_text(data: bytes) -> tuple[str | None, str]:
             return txt, "gemini"
 
     if provider in ("auto", "tesseract", "gemini"):
-        # Try every preprocessing variant and keep the richest transcription.
-        # The generator owns each image and releases it before building the next,
-        # so peak memory stays flat (see preprocess_variants) — the caller must
-        # NOT close them, or the generator's next step operates on a dead image.
+        # At most MAX_OCR_PASSES variants, each one `tesseract` subprocess. The
+        # generator owns each image and releases it before building the next, so
+        # the caller must NOT close them.
         best: str | None = None
-        for _label, img in preprocess_variants(data):
+        best_score = -1
+        for i, (_label, img) in enumerate(preprocess_variants(data)):
+            if i >= MAX_OCR_PASSES:
+                break
             txt = _tesseract_text(img)
-            if txt and len(txt.strip()) > len((best or "").strip()):
-                best = txt
+            if not txt or not txt.strip():
+                continue
+            s = score(txt) if score else len(txt.strip())
+            if s > best_score:
+                best, best_score = txt, s
         if best and best.strip():
             return best, "tesseract"
 
@@ -654,13 +661,27 @@ def parse_ocr_text(db: Session, text: str) -> dict[str, Any]:
     }
 
 
+def _match_count(db: Session, text: str) -> int:
+    """How many catalog entries this OCR text matches — the variant scorer.
+
+    Cheap enough to run per variant (it reuses the cached indexes) and a far
+    better signal than raw text length: a pass that reads three drug names beats
+    one that reads forty characters of page furniture.
+    """
+    try:
+        ex = extract_from_text(db, text)
+        return len(ex["medicines"]) * 2 + len(ex["tests"])
+    except Exception:
+        return 0
+
+
 def run_ocr(data: bytes, db: Session) -> tuple[str | None, dict[str, Any]]:
     """Returns ``(ocr_text, parsed)``.
 
     When no provider is available the parsed payload is the typed/manual
     fallback, which the UI turns into the manual-entry form.
     """
-    text, provider = ocr_text(data)
+    text, provider = ocr_text(data, score=lambda t: _match_count(db, t))
     if not text:
         return None, {
             "mode": "typed_fallback",
