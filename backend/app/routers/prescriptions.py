@@ -42,7 +42,7 @@ from ..deps import get_current_user, require_role
 from ..schemas import PrescriptionIn, SafetyCheckIn
 from ..services.dosage import format_dosage
 from ..services.ids import public_token, rx_code
-from ..services.safety import check_prescription
+from ..services.safety import check_prescription, interactions_for, side_effects_for
 
 router = APIRouter(prefix="/api/prescriptions", tags=["prescriptions"])
 
@@ -92,7 +92,15 @@ def safety_check(payload: SafetyCheckIn, user: M.User = Depends(require_role("do
         raise not_found("Patient not found")
     items = _resolve_items(db, payload.items)
     warnings = check_prescription(db, patient, items)
-    return {"warnings": warnings, "count": len(warnings)}
+    # The panel needs the detail as well as the verdict: the guards say whether
+    # anything is wrong, the two lists below say what each medicine's side effects
+    # are and which pairs interact. All read from the existing catalogue.
+    return {
+        "warnings": warnings,
+        "count": len(warnings),
+        "side_effects": side_effects_for(db, items),
+        "interactions": interactions_for(db, items),
+    }
 
 
 # ---------------------------------------------------------------- persistence
@@ -506,12 +514,12 @@ def _price_txt(it: dict) -> str:
     """Short price label for one prescribed medicine, or "" when unknown."""
     bits = []
     if it.get("pack_price") is not None:
-        bits.append(f"{it.get('pack_size') + ' ' if it.get('pack_size') else ''}\u09f3{it['pack_price']:.2f}")
+        bits.append(f"{it.get('pack_size') + ' ' if it.get('pack_size') else ''}৳{it['pack_price']:.2f}")
     elif it.get("unit_price") is not None:
-        bits.append(f"\u09f3{it['unit_price']:.2f}/unit")
+        bits.append(f"৳{it['unit_price']:.2f}/unit")
     if it.get("alternative_companies"):
         bits.append(f"{it['alternative_companies']} alt.")
-    return " \u00b7 ".join(bits)
+    return " · ".join(bits)
 
 
 def _render_print_html(d: dict, qr_b64: str, scan_url: str) -> str:
@@ -522,16 +530,16 @@ def _render_print_html(d: dict, qr_b64: str, scan_url: str) -> str:
     hos = d.get("hospital") or {}
 
     def esc(v) -> str:
-        return escape(str(v)) if v not in (None, "") else "\u2014"
+        return escape(str(v)) if v not in (None, "") else "—"
 
     item_rows = []
     for i, it in enumerate(d.get("items") or [], 1):
         dose = it.get("dose") or {}
         slots = dose.get("slots") or {}
-        slot_txt = " + ".join(f"{k[:2].title()} {v}" for k, v in slots.items() if v) or "\u2014"
+        slot_txt = " + ".join(f"{k[:2].title()} {v}" for k, v in slots.items() if v) or "—"
         dur = dose.get("duration") or {}
         dur_txt = (f"{dur.get('value')} {dur.get('unit', '')}".strip() if dur.get("value")
-                   else (str(dur.get("kind", "")).replace("_", " ") or "\u2014"))
+                   else (str(dur.get("kind", "")).replace("_", " ") or "—"))
         item_rows.append(
             "<tr>"
             f'<td class="n">{i}</td>'
@@ -548,8 +556,8 @@ def _render_print_html(d: dict, qr_b64: str, scan_url: str) -> str:
     def _test_price(t: dict) -> str:
         if t.get("price_min") is None:
             return ""
-        hi = f" \u2013 \u09f3{t['price_max']:.2f}" if t.get("price_max") else ""
-        return f' <span class="muted">(\u09f3{t["price_min"]:.2f}{hi})</span>'
+        hi = f" – ৳{t['price_max']:.2f}" if t.get("price_max") else ""
+        return f' <span class="muted">(৳{t["price_min"]:.2f}{hi})</span>'
 
     test_rows = "".join(
         f"<li><b>{esc(t.get('name'))}</b>{(' &mdash; ' + esc(t.get('note'))) if t.get('note') else ''}{_test_price(t)}</li>"
