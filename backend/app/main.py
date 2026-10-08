@@ -109,6 +109,24 @@ def _startup() -> None:
     problems = validate_dependencies()
     if problems:
         logging.getLogger("banglamed").warning("Module dependency problems: %s", problems)
+    # Warm the read-only catalog indexes now, at boot, rather than on the first
+    # prescription upload. Building them lazily meant the 25k-row index build and
+    # the `tesseract` subprocess peaked in the same request, which is what tipped
+    # Render's 512 MB free instance into an OOM kill (the 502s). Doing it here
+    # costs a little boot time and keeps the upload path flat.
+    try:
+        from .core.db import SessionLocal
+        from .services import interpreter as _interp
+
+        db = SessionLocal()
+        try:
+            _interp._brand_index(db)
+            _interp._test_index(db)
+            logging.getLogger("banglamed").info("catalog indexes warmed")
+        finally:
+            db.close()
+    except Exception as exc:  # pragma: no cover - never block startup on this
+        logging.getLogger("banglamed").warning("catalog warm-up skipped: %s", exc)
 
 
 @app.get("/api/health")
