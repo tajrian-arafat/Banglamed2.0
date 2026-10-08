@@ -6,6 +6,17 @@ import { IconSearch } from "../design-system/Icons";
 
 interface Hit { brand_id: number; brand: string; generic: string; company: string; strength: string; form: string; unit_price?: number | null; }
 
+// Typeahead timings. The brief used to be 220 ms AND a 2-character minimum, so
+// the first keystroke produced nothing at all and each subsequent key waited on
+// a debounce — which reads as "suggestions only appear after a pause".
+//
+// Now: suggestions fire from the FIRST character, and the debounce is short
+// enough to still coalesce a burst of typing into one request. The server side
+// is a prefix-only, index-only query (see /api/medicines/suggest), so a request
+// per keystroke is cheap.
+const MIN_CHARS = 1;
+const DEBOUNCE_MS = 90;
+
 export function MedicineSearch({
   placeholder, autoFocus, onPick, onQuery, initial = "",
 }: {
@@ -21,12 +32,18 @@ export function MedicineSearch({
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const box = useRef<HTMLDivElement>(null);
+  // Monotonic request id: a response is only applied when it belongs to the
+  // newest query, so a slow early response can never overwrite a later one.
   const reqId = useRef(0);
   const nav = useNavigate();
 
   useEffect(() => {
     const query = q.trim();
-    if (query.length < 2) { setHits([]); setErr(""); setLoading(false); onQuery?.(""); return; }
+    if (query.length < MIN_CHARS) {
+      setHits([]); setErr(""); setLoading(false); onQuery?.("");
+      reqId.current++; // invalidate anything in flight
+      return;
+    }
     setLoading(true);
     setErr("");
     const myReq = ++reqId.current;
@@ -34,8 +51,7 @@ export function MedicineSearch({
       if (myReq !== reqId.current) return;
       onQuery?.(query);
       try {
-        const r = await api.get<{ results: Hit[] }>(`/api/medicines/search?q=${encodeURIComponent(query)}&limit=8`);
-        // Ignore responses that arrive out of order for an older query.
+        const r = await api.get<{ results: Hit[] }>(`/api/medicines/suggest?q=${encodeURIComponent(query)}&limit=8`);
         if (myReq !== reqId.current) return;
         setHits(r.results);
         setOpen(true);
@@ -47,7 +63,7 @@ export function MedicineSearch({
       } finally {
         if (myReq === reqId.current) setLoading(false);
       }
-    }, 220);
+    }, DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [q]);
 
@@ -63,8 +79,9 @@ export function MedicineSearch({
     else nav(`/medicines/${h.brand_id}`);
   }
 
-  const showPanel = open && (loading || err !== "" || hits.length > 0);
-  const nothingFound = !loading && err === "" && hits.length === 0 && q.trim().length >= 2;
+  const ready = q.trim().length >= MIN_CHARS;
+  const showPanel = open && ready && (loading || err !== "" || hits.length > 0);
+  const nothingFound = !loading && err === "" && hits.length === 0 && ready;
 
   return (
     <div className="search-hero" ref={box}>
@@ -74,20 +91,25 @@ export function MedicineSearch({
         placeholder={placeholder || "Search a medicine, generic or company…"}
         value={q}
         autoFocus={autoFocus}
+        aria-label="Search medicines"
+        aria-expanded={showPanel}
+        role="combobox"
+        aria-autocomplete="list"
         onChange={(e) => setQ(e.target.value)}
         onFocus={() => (hits.length || err) && setOpen(true)}
         onKeyDown={(e) => {
           if (e.key === "Escape") setOpen(false);
-          if (e.key === "Enter" && q.trim().length >= 2) { setOpen(false); nav(`/medicines/q/${encodeURIComponent(q.trim())}`); }
+          if (e.key === "Enter" && ready) { setOpen(false); nav(`/medicines/q/${encodeURIComponent(q.trim())}`); }
         }}
       />
       {showPanel && (
-        <div className="glass search-results">
+        <div className="glass search-results" role="listbox">
           {loading && <div className="search-item muted small">Searching…</div>}
           {!loading && err !== "" && <div className="search-item muted small">Search unavailable — {err}</div>}
           {!loading && err === "" && nothingFound && <div className="search-item muted small">No medicine matches “{q.trim()}”.</div>}
           {hits.map((h) => (
-            <div key={h.brand_id} className="search-item" role="button" tabIndex={0}
+            <div key={h.brand_id} className="search-item" role="option" tabIndex={0}
+                 aria-selected={false}
                  onClick={() => pick(h)}
                  onKeyDown={(e) => { if (e.key === "Enter") pick(h); }}>
               <div className="row-between">

@@ -89,7 +89,18 @@ CITY_ALIASES = {
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    """Timestamp for imported rows.
+
+    Honours the deterministic build clock (models.stamp): on hosts without a
+    persistent disk the catalog is rebuilt on every deploy, and if ``collected_at``
+    / ``finished_at`` carried the wall clock the rebuilt state would differ on
+    every boot. With BANGLAMED_BUILD_EPOCH set they resolve to one fixed instant,
+    so two independent rebuilds produce identical rows and the state fingerprint
+    is stable.
+    """
+    from ..models import stamp
+
+    return stamp()
 
 
 def clean_text(v: Any) -> str | None:
@@ -611,7 +622,17 @@ def load_tests(db: Session, path: Path, source_name: str) -> dict:
 
 
 def build_fts(db: Session) -> dict:
-    """Rebuild the medicine_fts table from brands."""
+    """Rebuild the medicine_fts search index from brands.
+
+    The normalised columns (``brand_n``, ``generic_n``, ``company_n``,
+    ``form_n``, ``strength_n``, ``first_token``, ``brand_root``) are computed
+    ONCE here, at import time, using the same ``services/norm`` functions the
+    query path uses. That is what removes ~150k regex calls per keystroke from
+    the search hot path and lets SQLite serve prefix narrowing from an index.
+    """
+    from .norm import first_token as _ft
+    from .norm import norm as _n
+
     db.query(M.MedicineFts).delete()
     db.commit()
     brands = db.scalars(select(M.Brand)).all()
@@ -619,18 +640,24 @@ def build_fts(db: Session) -> dict:
     comp_names = {c.id: c.name for c in db.scalars(select(M.Company)).all()}
     n = 0
     for br in brands:
-        db.add(
-            M.MedicineFts(
-                brand_id=br.id,
-                brand=br.name or "",
-                generic=gen_names.get(br.generic_id, "") or "",
-                company=comp_names.get(br.company_id, "") or "",
-                aliases="",
-                name_bn="",
-                strength=br.strength_text or "",
-                form=br.form_name or "",
-            )
+        row = M.MedicineFts(
+            brand_id=br.id,
+            brand=br.name or "",
+            generic=gen_names.get(br.generic_id, "") or "",
+            company=comp_names.get(br.company_id, "") or "",
+            aliases="",
+            name_bn="",
+            strength=br.strength_text or "",
+            form=br.form_name or "",
         )
+        row.brand_n = _n(row.brand)
+        row.generic_n = _n(row.generic)
+        row.company_n = _n(row.company)
+        row.form_n = _n(row.form)
+        row.strength_n = _n(row.strength)
+        row.first_token = _ft(row.brand)
+        row.brand_root = _ft(row.brand)
+        db.add(row)
         n += 1
         if n % 3000 == 0:
             db.commit()
