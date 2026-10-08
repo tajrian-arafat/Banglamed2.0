@@ -12,7 +12,7 @@ from ..core.db import get_db
 from ..core.errors import not_found
 from ..deps import get_current_user
 from ..services.relations import brand_card, compute_relations
-from ..services.search import search_medicines
+from ..services.search import search_medicines, suggest_medicines
 
 router = APIRouter(prefix="/api", tags=["catalog"])
 
@@ -41,15 +41,22 @@ def _brand_card(db: Session, b: M.Brand) -> dict:
 
 @router.get("/medicines/search")
 def medicines_search(q: str = Query("", min_length=0), limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)):
+    """Ranked search. Prices now come back with the rows from the search service
+    (one joined query) instead of a ``db.get`` per hit here."""
     results = search_medicines(db, q, limit=limit)
-    # enrich with price
-    for r in results:
-        b = db.get(M.Brand, r["brand_id"])
-        if b:
-            r["unit_price"] = float(b.unit_price) if b.unit_price is not None else None
-            r["strip_price"] = float(b.strip_price) if b.strip_price is not None else None
-            r["pieces_per_strip"] = b.pieces_per_strip
-            r["pack_size"] = b.pack_size
+    return {"query": q, "count": len(results), "results": results}
+
+
+@router.get("/medicines/suggest")
+def medicines_suggest(q: str = Query("", min_length=1), limit: int = Query(8, ge=1, le=20), db: Session = Depends(get_db)):
+    """Keystroke typeahead. Answers from the FIRST character.
+
+    Prefix-only and index-only (see services/search.suggest_medicines), so it is
+    cheap enough to call on every key-press. Split from ``/search`` so the ranked
+    path keeps its substring fallback without that cost landing on every
+    keystroke.
+    """
+    results = suggest_medicines(db, q, limit=limit)
     return {"query": q, "count": len(results), "results": results}
 
 
