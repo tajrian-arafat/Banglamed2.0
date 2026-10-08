@@ -10,10 +10,15 @@ interface Rx {
   doctor: { name: string; bmdc_no: string | null; speciality: string | null; qualifications: string | null } | null;
   patient: { patient_code: string; full_name: string; sex: string | null; dob: string | null } | null;
   diagnosis: string | null; chief_complaints: string | null; notes: string | null; advice: string | null;
-  items: { name: string | null; form: string | null; strength: string | null; bn_dosage_text: string | null; instructions: string | null }[];
-  tests: { name: string | null; note: string | null }[];
+  items: { name: string | null; form: string | null; strength: string | null; bn_dosage_text: string | null; instructions: string | null;
+           company?: string | null; unit_price?: number | null; strip_price?: number | null;
+           pack_size?: string | null; pack_price?: number | null; alternative_companies?: number }[];
+  tests: { name: string | null; note: string | null; price_min?: number | null; price_max?: number | null }[];
   verified: boolean; disclaimer: string;
 }
+
+/** Currency for the catalogue (BDT). */
+function tk(v?: number | null) { return v == null ? null : `\u09f3${v.toFixed(2)}`; }
 
 export default function RxPublic() {
   const { token } = useParams();
@@ -41,12 +46,12 @@ export default function RxPublic() {
         <div className="grid grid-2">
           <div>
             <div className="tiny muted">Doctor</div>
-            <div className="name">{d.doctor?.name || "—"}</div>
-            <div className="tiny muted">{d.doctor?.speciality || ""}{d.doctor?.bmdc_no ? ` · BMDC ${d.doctor.bmdc_no}` : ""}</div>
+            <div className="name">{d.doctor?.name || "\u2014"}</div>
+            <div className="tiny muted">{d.doctor?.speciality || ""}{d.doctor?.bmdc_no ? ` \u00b7 BMDC ${d.doctor.bmdc_no}` : ""}</div>
           </div>
           <div>
             <div className="tiny muted">Patient</div>
-            <div className="name">{d.patient?.full_name || "—"}</div>
+            <div className="name">{d.patient?.full_name || "\u2014"}</div>
             <div className="tiny muted">{d.patient?.patient_code || ""}</div>
           </div>
         </div>
@@ -65,11 +70,18 @@ export default function RxPublic() {
         {d.items.map((it, i) => (
           <div key={i} className="rx-item">
             <div className="row-between">
-              <div className="name">{i + 1}. {it.name || "—"} <span className="tiny muted">{it.strength || ""}</span></div>
+              <div className="name">{i + 1}. {it.name || "\u2014"} <span className="tiny muted">{it.strength || ""}</span></div>
               <span className="tiny muted">{it.form || ""}</span>
             </div>
             {it.bn_dosage_text && <div className="bn-dosage">{it.bn_dosage_text}</div>}
             {it.instructions && <div className="tiny muted">{it.instructions}</div>}
+            <div className="row wrap" style={{ gap: 10, marginTop: 4 }}>
+              {it.company && <span className="tiny muted">{it.company}</span>}
+              {tk(it.unit_price) && <Badge>{tk(it.unit_price)} / unit</Badge>}
+              {tk(it.pack_price) && <Badge tone="ok">{it.pack_size ? `${it.pack_size} \u00b7 ` : ""}{tk(it.pack_price)}</Badge>}
+              {tk(it.strip_price) && <span className="tiny muted">{tk(it.strip_price)} / strip</span>}
+              {!!it.alternative_companies && <span className="tiny muted">{it.alternative_companies} alternative compan{it.alternative_companies === 1 ? "y" : "ies"}</span>}
+            </div>
           </div>
         ))}
       </div>
@@ -78,7 +90,15 @@ export default function RxPublic() {
         <div className="glass card" style={{ marginTop: 14 }}>
           <h3 style={{ marginTop: 0 }}>Tests advised</h3>
           {d.tests.map((t, i) => (
-            <div key={i} className="list-row"><div className="name">{t.name || "—"}</div>{t.note && <span className="tiny muted">{t.note}</span>}</div>
+            <div key={i} className="list-row">
+              <div className="name">{t.name || "\u2014"}</div>
+              <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                {t.note && <span className="tiny muted">{t.note}</span>}
+                {(tk(t.price_min) || tk(t.price_max)) && (
+                  <Badge tone="ok">{tk(t.price_min) && tk(t.price_max) ? `${tk(t.price_min)} \u2013 ${tk(t.price_max)}` : (tk(t.price_min) || tk(t.price_max))}</Badge>
+                )}
+              </div>
+            </div>
           ))}
         </div>
       )}
@@ -88,7 +108,7 @@ export default function RxPublic() {
       <div className="glass card alert-note" style={{ marginTop: 14 }}>
         <div className="row" style={{ gap: 8 }}><IconShield size={16} /><strong className="small">Integrity</strong></div>
         <p className="tiny muted" style={{ marginBottom: 0 }}>
-          {d.verified ? "The digital seal on this prescription is intact — its contents have not been altered since it was issued." : "This prescription is not sealed or the seal could not be verified."}
+          {d.verified ? "The digital seal on this prescription is intact \u2014 its contents have not been altered since it was issued." : "This prescription is not sealed or the seal could not be verified."}
         </p>
       </div>
       <p className="tiny muted" style={{ marginTop: 12 }}>{d.disclaimer}</p>

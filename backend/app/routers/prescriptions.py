@@ -438,6 +438,10 @@ def print_prescription(rx_id: int, user: M.User = Depends(get_current_user), db:
     if not _can_view(db, rx, user):
         raise forbidden("Not permitted to print this prescription")
     data = _rx_payload(db, rx)
+    # Prices are looked up at DISPLAY time, never stored on the prescription: the
+    # digital seal covers the clinical content only, so enriching here (and on the
+    # public scan route) cannot invalidate a signature that already exists.
+    _add_prices(db, data, with_availability=True)
     scan_url = f"/rx/{rx.public_token}"
     img = qrcode.make(scan_url)
     buf = io.BytesIO()
@@ -445,6 +449,69 @@ def print_prescription(rx_id: int, user: M.User = Depends(get_current_user), db:
     qr_b64 = base64.b64encode(buf.getvalue()).decode()
     log_action(db, user.id, "prescription_print", "prescription", rx.rx_code)
     return HTMLResponse(_render_print_html(data, qr_b64, scan_url))
+
+
+def _add_prices(db: Session, payload: dict, with_availability: bool = False) -> None:
+    """Attach catalogue prices to the prescribed medicines and tests.
+
+    Deliberately NOT part of ``_rx_payload``: that dict is what gets signed, so
+    putting prices in it would break every seal the moment a price changed. This
+    runs on top of the sealed payload for display only.
+
+    Raw SQL on purpose — the shape of the catalogue tables is not needed here,
+    just two columns each, and this keeps working if the ORM models move.
+    """
+    from sqlalchemy import text as _sql
+
+    def _f(v):
+        return float(v) if v is not None else None
+
+    for item in payload.get("items") or []:
+        bid = item.get("brand_id")
+        if not bid:
+            continue
+        row = db.execute(_sql(
+            "SELECT b.unit_price, b.strip_price, b.pack_size, b.pack_price, c.name "
+            "FROM brands b LEFT JOIN companies c ON c.id = b.company_id WHERE b.id = :i"
+        ), {"i": bid}).fetchone()
+        if not row:
+            continue
+        item["company"] = row[4]
+        item["unit_price"] = _f(row[0])
+        item["strip_price"] = _f(row[1])
+        item["pack_size"] = row[2]
+        item["pack_price"] = _f(row[3])
+        if with_availability:
+            alt = db.execute(_sql(
+                "SELECT COUNT(DISTINCT b2.company_id) FROM brands b2 "
+                "WHERE b2.generic_id = (SELECT generic_id FROM brands WHERE id = :i) "
+                "AND b2.id <> :i AND b2.status = 'active'"
+            ), {"i": bid}).fetchone()
+            item["alternative_companies"] = int(alt[0]) if alt and alt[0] is not None else 0
+
+    for t in payload.get("tests") or []:
+        tid = t.get("test_id")
+        if not tid:
+            continue
+        row = db.execute(_sql(
+            "SELECT price_min, price_max FROM tests WHERE id = :i"
+        ), {"i": tid}).fetchone()
+        if not row:
+            continue
+        t["price_min"] = _f(row[0])
+        t["price_max"] = _f(row[1])
+
+
+def _price_txt(it: dict) -> str:
+    """Short price label for one prescribed medicine, or "" when unknown."""
+    bits = []
+    if it.get("pack_price") is not None:
+        bits.append(f"{it.get('pack_size') + ' ' if it.get('pack_size') else ''}\u09f3{it['pack_price']:.2f}")
+    elif it.get("unit_price") is not None:
+        bits.append(f"\u09f3{it['unit_price']:.2f}/unit")
+    if it.get("alternative_companies"):
+        bits.append(f"{it['alternative_companies']} alt.")
+    return " \u00b7 ".join(bits)
 
 
 def _render_print_html(d: dict, qr_b64: str, scan_url: str) -> str:
@@ -455,16 +522,16 @@ def _render_print_html(d: dict, qr_b64: str, scan_url: str) -> str:
     hos = d.get("hospital") or {}
 
     def esc(v) -> str:
-        return escape(str(v)) if v not in (None, "") else "—"
+        return escape(str(v)) if v not in (None, "") else "\u2014"
 
     item_rows = []
     for i, it in enumerate(d.get("items") or [], 1):
         dose = it.get("dose") or {}
         slots = dose.get("slots") or {}
-        slot_txt = " + ".join(f"{k[:2].title()} {v}" for k, v in slots.items() if v) or "—"
+        slot_txt = " + ".join(f"{k[:2].title()} {v}" for k, v in slots.items() if v) or "\u2014"
         dur = dose.get("duration") or {}
         dur_txt = (f"{dur.get('value')} {dur.get('unit', '')}".strip() if dur.get("value")
-                   else (str(dur.get("kind", "")).replace("_", " ") or "—"))
+                   else (str(dur.get("kind", "")).replace("_", " ") or "\u2014"))
         item_rows.append(
             "<tr>"
             f'<td class="n">{i}</td>'
@@ -472,13 +539,20 @@ def _render_print_html(d: dict, qr_b64: str, scan_url: str) -> str:
             f"<td>{esc(slot_txt)}</td>"
             f"<td>{esc(dur_txt)}</td>"
             f"<td>{esc(it.get('bn_dosage_text') or it.get('instructions'))}</td>"
+            f"<td class=\"muted\">{esc(_price_txt(it))}</td>"
             "</tr>"
         )
     if not item_rows:
-        item_rows.append('<tr><td colspan="5" class="muted">No medicines recorded.</td></tr>')
+        item_rows.append('<tr><td colspan="6" class="muted">No medicines recorded.</td></tr>')
+
+    def _test_price(t: dict) -> str:
+        if t.get("price_min") is None:
+            return ""
+        hi = f" \u2013 \u09f3{t['price_max']:.2f}" if t.get("price_max") else ""
+        return f' <span class="muted">(\u09f3{t["price_min"]:.2f}{hi})</span>'
 
     test_rows = "".join(
-        f"<li><b>{esc(t.get('name'))}</b>{(' &mdash; ' + esc(t.get('note'))) if t.get('note') else ''}</li>"
+        f"<li><b>{esc(t.get('name'))}</b>{(' &mdash; ' + esc(t.get('note'))) if t.get('note') else ''}{_test_price(t)}</li>"
         for t in (d.get("tests") or [])
     ) or '<li class="muted">No investigations requested.</li>'
 
@@ -541,7 +615,7 @@ def _render_print_html(d: dict, qr_b64: str, scan_url: str) -> str:
 
   <div class="meta">
     <div class="box"><div class="k">Patient</div><b>{esc(pat.get('full_name'))}</b><div class="muted">{esc(pat.get('patient_code'))}</div></div>
-    <div class="box"><div class="k">Date of birth / Sex</div><b>{esc(pat.get('dob') or '—')}</b><div class="muted">{esc(pat.get('sex'))}</div></div>
+    <div class="box"><div class="k">Date of birth / Sex</div><b>{esc(pat.get('dob') or '\u2014')}</b><div class="muted">{esc(pat.get('sex'))}</div></div>
     <div class="box"><div class="k">Rx No.</div><b>{esc(d.get('rx_code'))}</b><div class="muted">{esc((d.get('issued_at') or '')[:10])}</div></div>
   </div>
 
@@ -552,7 +626,7 @@ def _render_print_html(d: dict, qr_b64: str, scan_url: str) -> str:
 
   <div class="rx">&#8478;</div>
   <table>
-    <thead><tr><th></th><th>Medicine</th><th>Dose</th><th>Duration</th><th>Instructions</th></tr></thead>
+    <thead><tr><th></th><th>Medicine</th><th>Dose</th><th>Duration</th><th>Instructions</th><th>Price</th></tr></thead>
     <tbody>{''.join(item_rows)}</tbody>
   </table>
 
@@ -592,6 +666,9 @@ def public_rx(token: str, db: Session = Depends(get_db)):
     if not rx:
         raise not_found("Prescription not found")
     payload = _rx_payload(db, rx)
+    # The point of the scan: the prescribed medicines and tests WITH their
+    # catalogue prices.
+    _add_prices(db, payload, with_availability=True)
     payload["verified"] = bool(rx.content_hash) and verify_signature(
         _signable_payload(db, rx), rx.content_hash, rx.signature or "")
     payload["disclaimer"] = "Informational only. Not medical advice."
