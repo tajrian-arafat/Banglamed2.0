@@ -11,6 +11,8 @@ interface Item {
 }
 interface TestRow { test_id: number | null; name: string; note: string; price_min?: number | null; }
 interface Warn { code: string; severity: string; message: string; medicines_involved?: string[]; }
+interface SideEffect { name: string; text: string; }
+interface Interaction { a: string; b: string; severity: string; note: string; }
 interface MyRx { id: number; rx_code: string; status: string; issued_at: string | null; patient_name: string | null; patient_code: string | null; diagnosis: string | null; versions: number; }
 interface VersionRow { version: number; reason: string | null; created_at: string | null; content_hash: string | null; item_count: number; test_count: number; }
 interface Doctor { name?: string; speciality?: string; qualifications?: string; designation?: string; bmdc_no?: string; }
@@ -36,6 +38,8 @@ export default function DoctorPrescribe() {
   const [complaints, setComplaints] = useState("");
   const [advice, setAdvice] = useState("");
   const [warnings, setWarnings] = useState<Warn[]>([]);
+  const [sideEffects, setSideEffects] = useState<SideEffect[]>([]);
+  const [interactions, setInteractions] = useState<Interaction[]>([]);
   const [acks, setAcks] = useState<Record<string, boolean>>({});
   const [rxId, setRxId] = useState<number | null>(null);
   const [rxCode, setRxCode] = useState("");
@@ -111,12 +115,28 @@ export default function DoctorPrescribe() {
     };
   }
 
+  // Live safety: re-run the check as the doctor adds or edits medicines, so the
+  // panel fills in without pressing "Safety check". Debounced so a burst of
+  // keystrokes collapses into one request.
+  useEffect(() => {
+    if (!pid || items.length === 0) { setWarnings([]); setSideEffects([]); setInteractions([]); return; }
+    const t = setTimeout(() => {
+      api.post<{ warnings: Warn[]; side_effects?: SideEffect[]; interactions?: Interaction[] }>(
+        "/api/prescriptions/safety-check", { patient_id: pid, items: payload().items })
+        .then((r) => { setWarnings(r.warnings); setSideEffects(r.side_effects || []); setInteractions(r.interactions || []); })
+        .catch(() => { /* non-fatal: the panel keeps its last good state */ });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [pid, items]);
+
   async function check() {
     if (!pid || items.length === 0) return;
     setBusy(true);
     try {
-      const r = await api.post<{ warnings: Warn[] }>("/api/prescriptions/safety-check", { patient_id: pid, items: payload().items });
+      const r = await api.post<{ warnings: Warn[]; side_effects?: SideEffect[]; interactions?: Interaction[] }>("/api/prescriptions/safety-check", { patient_id: pid, items: payload().items });
       setWarnings(r.warnings);
+      setSideEffects(r.side_effects || []);
+      setInteractions(r.interactions || []);
       toast(r.warnings.length ? `${r.warnings.length} safety note(s)` : "No safety issues found");
     } catch (e: any) { toast(e.message); } finally { setBusy(false); }
   }
@@ -199,7 +219,7 @@ export default function DoctorPrescribe() {
 
   function reset() {
     setRxId(null); setRxCode(""); setStatus("draft"); setItems([]); setTests([]);
-    setDiagnosis(""); setComplaints(""); setAdvice(""); setWarnings([]); setAcks({}); setVersions([]);
+    setDiagnosis(""); setComplaints(""); setAdvice(""); setWarnings([]); setSideEffects([]); setInteractions([]); setAcks({}); setVersions([]);
   }
 
   if (booting) return <div className="container"><Loading /></div>;
@@ -329,30 +349,60 @@ export default function DoctorPrescribe() {
 
         {/* ------------------------------------------------ live sheet + side */}
         <div className="col" style={{ gap: 14 }}>
-          {/* The prescription PAD artwork with the live values written over its blanks. */}
-          <TemplateSheet patient={patient} doctor={doctor} rxCode={rxCode} diagnosis={diagnosis}
-                     complaints={complaints} advice={advice} items={items} tests={tests} />
           <LiveSheet patient={patient} doctor={doctor} rxCode={rxCode} diagnosis={diagnosis}
                      complaints={complaints} advice={advice} items={items} tests={tests} />
 
           <div className="glass card">
             <h3 style={{ marginTop: 0 }}><IconShield size={18} /> Safety</h3>
-            {warnings.length === 0 && <div className="muted small">Run a safety check to see warnings.</div>}
-            {warnings.map((w, i) => (
-              <div key={i} className={`alert ${w.severity === "critical" ? "alert-error" : "alert-note"}`} style={{ marginBottom: 8 }}>
-                <div className="row-between">
-                  <div className="row" style={{ gap: 6 }}><IconAlert size={15} /><strong className="small">{w.code.replace(/_/g, " ")}</strong></div>
-                  <Badge tone={w.severity === "critical" ? "warn" : ""}>{w.severity}</Badge>
-                </div>
-                <div className="tiny" style={{ marginTop: 4 }}>{w.message}</div>
-                {w.severity === "critical" && (
-                  <label className="row tiny" style={{ gap: 6, marginTop: 6 }}>
-                    <input type="checkbox" checked={!!acks[w.code]} onChange={(e) => setAcks({ ...acks, [w.code]: e.target.checked })} />
-                    Acknowledge to proceed
-                  </label>
-                )}
-              </div>
-            ))}
+            <div className="tiny muted" style={{ marginBottom: 8 }}>
+              Updates live as you add medicines. Guards, side effects and interactions are read from the medicine database.
+            </div>
+
+            <div className="tiny" style={{ textTransform: "uppercase", letterSpacing: ".6px", color: "var(--muted)", marginBottom: 4 }}>Guards</div>
+            {items.length === 0
+              ? <div className="muted small">Add a medicine to see safety guards.</div>
+              : warnings.length === 0
+                ? <div className="small">No safety guards triggered.</div>
+                : warnings.map((w, i) => (
+                    <div key={i} className={`alert ${w.severity === "critical" ? "alert-error" : "alert-note"}`} style={{ marginBottom: 8 }}>
+                      <div className="row-between">
+                        <div className="row" style={{ gap: 6 }}><IconAlert size={15} /><strong className="small">{w.code.replace(/_/g, " ")}</strong></div>
+                        <Badge tone={w.severity === "critical" ? "warn" : ""}>{w.severity}</Badge>
+                      </div>
+                      <div className="tiny" style={{ marginTop: 4 }}>{w.message}</div>
+                      {w.severity === "critical" && (
+                        <label className="row tiny" style={{ gap: 6, marginTop: 6 }}>
+                          <input type="checkbox" checked={!!acks[w.code]} onChange={(e) => setAcks({ ...acks, [w.code]: e.target.checked })} />
+                          Acknowledge to proceed
+                        </label>
+                      )}
+                    </div>
+                  ))}
+
+            <div className="tiny" style={{ textTransform: "uppercase", letterSpacing: ".6px", color: "var(--muted)", margin: "10px 0 4px" }}>Side effects</div>
+            {sideEffects.length === 0
+              ? <div className="muted small">Add a medicine to see its side effects.</div>
+              : sideEffects.map((s, i) => (
+                  <div key={i} style={{ padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+                    <div className="small"><b>{s.name}</b></div>
+                    <div className="tiny muted" style={{ marginTop: 2 }}>{s.text || "None recorded in the medicine database."}</div>
+                  </div>
+                ))}
+
+            <div className="tiny" style={{ textTransform: "uppercase", letterSpacing: ".6px", color: "var(--muted)", margin: "10px 0 4px" }}>Interactions</div>
+            {items.length < 2
+              ? <div className="muted small">Add two or more medicines to check interactions.</div>
+              : interactions.length === 0
+                ? <div className="muted small">No interactions recorded between these medicines.</div>
+                : interactions.map((x, i) => (
+                    <div key={i} className={`alert ${x.severity === "critical" ? "alert-error" : "alert-note"}`} style={{ marginBottom: 8 }}>
+                      <div className="row-between">
+                        <strong className="small">{x.a} + {x.b}</strong>
+                        <Badge tone={x.severity === "critical" ? "warn" : ""}>{x.severity}</Badge>
+                      </div>
+                      <div className="tiny" style={{ marginTop: 4 }}>{x.note}</div>
+                    </div>
+                  ))}
           </div>
 
           {versions.length > 0 && (
@@ -532,104 +582,6 @@ function LiveSheet({ patient, doctor, rxCode, diagnosis, complaints, advice, ite
             <div>medicine &amp; test prices</div>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------- prescription pad (template + live) */
-/**
- * The supplied prescription-pad artwork. Served from the project's permanent
- * object store, so no binary asset has to live in the repository (and the SPA
- * build stays small). `frontend/public/rx_template.png` holds the same image for
- * offline development.
- */
-const RX_PAD_URL =
-  "https://teamily-storage.becdn.net/im/images/2267791790744783/a2e554ba-60e2-4293-9ec2-921da0ea951d.msg_picture_17914304218680000005587_0.png";
-
-/** Absolutely-positioned text placed over the pad artwork. x/y/w are percentages. */
-function Abs({ x, y, w, children, size = 9, bold = false, color = "#12306b", align = "left" }: {
-  x: number; y: number; w: number; children: any; size?: number; bold?: boolean; color?: string;
-  align?: "left" | "right";
-}) {
-  return (
-    <div style={{
-      position: "absolute", left: `${x}%`, top: `${y}%`, width: `${w}%`,
-      fontSize: `${size}px`, lineHeight: 1.3, color, fontWeight: bold ? 700 : 500,
-      textAlign: align, whiteSpace: "pre-wrap", overflow: "hidden", pointerEvents: "none",
-    }}>{children}</div>
-  );
-}
-
-/**
- * The LIVE prescription drawn on the supplied prescription-pad artwork
- * (`/rx_template.png`, 1024x1536). Every field the doctor types is written
- * straight onto the pad, so the sheet fills in keystroke by keystroke.
- *
- * Blanks on the pad were measured against the artwork; positions below are
- * percentages of its width/height, so the sheet scales with the column.
- */
-function TemplateSheet({ patient, doctor, rxCode, diagnosis, complaints, advice, items, tests }: {
-  patient: P | null; doctor: Doctor; rxCode: string; diagnosis: string; complaints: string; advice: string;
-  items: Item[]; tests: TestRow[];
-}) {
-  const named = tests.filter((t) => t.name.trim());
-  const age = patient?.dob ? Math.max(0, new Date().getFullYear() - Number(String(patient.dob).slice(0, 4))) : null;
-  const today = new Date().toISOString().slice(0, 10);
-
-  return (
-    <div className="glass card" style={{ padding: 12 }}>
-      <div className="row-between" style={{ marginBottom: 8 }}>
-        <div className="tiny muted" style={{ letterSpacing: ".6px", textTransform: "uppercase" }}>Prescription pad — live</div>
-        <div className="tiny muted">{rxCode || "not saved"} · updates as you type</div>
-      </div>
-
-      {/* padding-top = 1536/1024 keeps the pad's true aspect ratio; absolutely
-          positioned children resolve their % against this box. */}
-      <div style={{ position: "relative", width: "100%", paddingTop: "150%", borderRadius: 8, overflow: "hidden", background: "#fff", boxShadow: "0 4px 18px rgba(0,0,0,.18)" }}>
-        <img src={RX_PAD_URL} alt="Prescription pad" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "fill" }} />
-
-        {/* Header: blank out the pad's own printed doctor block, print the signed-in doctor. */}
-        <div style={{ position: "absolute", left: "58%", top: "1.2%", width: "40%", height: "10%", background: "#fff" }} />
-        <Abs x={58.5} y={1.8} w={39} size={13} bold align="right">{doctor.name || "Doctor"}</Abs>
-        <Abs x={58.5} y={5.0} w={39} size={8} color="#3d5a86" align="right">{doctor.qualifications || "MBBS"}</Abs>
-        <Abs x={58.5} y={7.4} w={39} size={9.5} bold align="right">{doctor.speciality || ""}</Abs>
-        <Abs x={58.5} y={9.6} w={39} size={8} color="#3d5a86" align="right">
-          {doctor.designation ? `${doctor.designation} · BMDC ${doctor.bmdc_no || "—"}` : `BMDC Reg. No. ${doctor.bmdc_no || "—"}`}
-        </Abs>
-
-        {/* Patient line */}
-        <Abs x={10.5} y={13.4} w={29} size={10} bold>{patient?.full_name || "—"}</Abs>
-        <Abs x={46.5} y={13.4} w={13} size={9}>{patient?.patient_code || "—"}</Abs>
-        <Abs x={66} y={13.4} w={10} size={9}>{age != null ? `${age}` : "—"}</Abs>
-        <Abs x={85.5} y={13.4} w={11} size={9}>{today}</Abs>
-
-        {/* Left column: complaints / investigations / comment */}
-        <Abs x={4} y={21.3} w={28} size={9}>{complaints || "—"}</Abs>
-        <Abs x={4} y={45.2} w={28} size={9}>
-          {named.length ? named.map((t, i) => `${i + 1}. ${t.name}${t.note ? ` (${t.note})` : ""}`).join("\n") : "—"}
-        </Abs>
-        <Abs x={4} y={57.4} w={28} size={9}>{diagnosis || "—"}</Abs>
-
-        {/* Rx area: one line per medicine, filling in as it is typed */}
-        {items.length === 0
-          ? <Abs x={37} y={21.4} w={60} size={9} color="#7a879b">No medicine added yet.</Abs>
-          : items.map((it, i) => (
-              <Abs key={i} x={37} y={21.4 + i * 3.3} w={60} size={9.5} bold>
-                {`${i + 1}. ${it.name || "—"} ${it.strength || ""}`.trim()}
-                <span style={{ fontWeight: 400, color: "#3d5a86" }}>
-                  {`    ${slotText(it.slots)}   ${durText(it)}   ${MEALS[it.meal] || it.meal || ""}`}
-                </span>
-              </Abs>
-            ))}
-
-        {/* Advice + signature */}
-        <Abs x={4} y={85.6} w={28} size={8.5} color="#3d5a86">{advice || ""}</Abs>
-        <Abs x={77} y={88.6} w={20} size={9} align="right">{doctor.name || "Doctor"}</Abs>
-      </div>
-
-      <div className="tiny muted" style={{ marginTop: 6 }}>
-        The QR code is added when you press “Print (with QR)” — it is not minted at save time.
       </div>
     </div>
   );
