@@ -83,8 +83,12 @@ def main() -> int:
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     created = 0
+    # A FIXED number per day, so the demo history is deterministic by construction
+    # (14 days x 4 = 56 prescriptions) rather than depending on a random draw.
+    # The RNG is still seeded for the per-prescription details below.
+    PER_DAY = 4
     for day in range(13, -1, -1):
-        for _ in range(random.randint(1, 3)):
+        for _ in range(PER_DAY):
             doctor = random.choice(doctors)
             issued = now - timedelta(days=day, hours=random.randint(0, 9), minutes=random.randint(0, 59))
             rx = M.Prescription(
