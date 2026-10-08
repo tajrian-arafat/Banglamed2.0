@@ -17,7 +17,8 @@ from sqlalchemy import select  # noqa: E402
 
 from app import models as M  # noqa: E402
 from app.core.db import SessionLocal, init_db  # noqa: E402
-from app.core.security import hash_password  # noqa: E402
+from app.core.security import demo_password_hash  # noqa: E402
+from app.models import build_epoch  # noqa: E402
 from app.services.ids import doc_code, patient_code  # noqa: E402
 
 DEMO = [
@@ -44,7 +45,7 @@ def main() -> int:
     for username, pw, role, full_name in DEMO:
         u = db.scalar(select(M.User).where(M.User.username == username))
         if not u:
-            u = M.User(username=username, password_hash=hash_password(pw), role=role, full_name=full_name,
+            u = M.User(username=username, password_hash=demo_password_hash(username, pw), role=role, full_name=full_name,
                        account_type="personal")
             db.add(u)
             db.commit()
@@ -62,8 +63,9 @@ def main() -> int:
             db.add(d)
             db.commit()
             db.refresh(d)
-        # a schedule for tomorrow
-        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+        # a schedule for tomorrow (fixed date during a deterministic build)
+        base = build_epoch() or datetime.now(timezone.utc)
+        tomorrow = (base + timedelta(days=1)).date().isoformat()
         s = db.scalar(select(M.DoctorSchedule).where(M.DoctorSchedule.doctor_id == d.id, M.DoctorSchedule.date == tomorrow))
         if not s:
             db.add(M.DoctorSchedule(doctor_id=d.id, date=tomorrow, total_serials=30, session_start="17:00",
