@@ -68,3 +68,8 @@ services:
       # Widen this if you add a custom domain.
       - key: CORS_ORIGINS
         value: https://banglamed2.onrender.com
+      # Prescription reading. "auto" = Gemini when GEMINI_API_KEY is set,
+      # otherwise the bundled Tesseract engine. Set OCR_PROVIDER=tesseract to
+      # force the offline engine, or add GEMINI_API_KEY for handwriting.
+      - key: OCR_PROVIDER
+        value: auto

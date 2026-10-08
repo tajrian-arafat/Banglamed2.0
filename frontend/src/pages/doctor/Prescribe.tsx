@@ -243,7 +243,7 @@ export default function DoctorPrescribe() {
             </label>
           </div>
 
-          <div className="glass card">
+          <div className="glass card card-search">
             <h3 style={{ marginTop: 0 }}><IconPlus size={18} /> Add medicine</h3>
             <MedicineSearch onPick={addItem} placeholder="Search a medicine to add…" />
           </div>
@@ -562,12 +562,12 @@ function Abs({ x, y, w, children, size = 9, bold = false, color = "#12306b", ali
 }
 
 /**
- * The LIVE prescription drawn on the supplied prescription-pad artwork.
- * Every field the doctor types is written straight onto the pad, so the sheet
- * fills in keystroke by keystroke.
+ * The LIVE prescription drawn on the supplied prescription-pad artwork
+ * (`/rx_template.png`, 1024x1536). Every field the doctor types is written
+ * straight onto the pad, so the sheet fills in keystroke by keystroke.
  *
- * Blanks on the pad were measured against the 1024x1536 artwork; positions below
- * are percentages of its width/height, so the sheet scales with the column.
+ * Blanks on the pad were measured against the artwork; positions below are
+ * percentages of its width/height, so the sheet scales with the column.
  */
 function TemplateSheet({ patient, doctor, rxCode, diagnosis, complaints, advice, items, tests }: {
   patient: P | null; doctor: Doctor; rxCode: string; diagnosis: string; complaints: string; advice: string;
@@ -604,7 +604,7 @@ function TemplateSheet({ patient, doctor, rxCode, diagnosis, complaints, advice,
         <Abs x={66} y={13.4} w={10} size={9}>{age != null ? `${age}` : "—"}</Abs>
         <Abs x={85.5} y={13.4} w={11} size={9}>{today}</Abs>
 
-        {/* Left column: complaints / investigations / diagnosis */}
+        {/* Left column: complaints / investigations / comment */}
         <Abs x={4} y={21.3} w={28} size={9}>{complaints || "—"}</Abs>
         <Abs x={4} y={45.2} w={28} size={9}>
           {named.length ? named.map((t, i) => `${i + 1}. ${t.name}${t.note ? ` (${t.note})` : ""}`).join("\n") : "—"}

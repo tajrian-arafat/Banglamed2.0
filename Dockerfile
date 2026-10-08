@@ -5,11 +5,11 @@
 # FastAPI/uvicorn serves BOTH the JSON API and the built React SPA from the same
 # origin, so the frontend's relative `/api/*` calls work with no CORS setup.
 #
-# ── Why a multi-stage build ───────────────────────────────────────────────────
+# ── Why a multi-stage build ──────────────────────────────────────────────────
 # The SPA is compiled in a Node stage and copied into the Python runtime, so the
 # runtime image needs no Node toolchain and the build is fully reproducible.
 #
-# ── Database persistence (the honest answer) ──────────────────────────────────
+# ── Database persistence (the honest answer) ─────────────────────────────────
 # Render's free tier mounts NO persistent disk, so a database written at runtime
 # is destroyed on every deploy AND every restart (including a wake from sleep).
 # The catalog is therefore REBUILT from the original source data during the image
@@ -30,7 +30,7 @@
 # effect: every fresh container comes up fully populated, with no data committed
 # to the repository.
 #
-# ── Secrets ───────────────────────────────────────────────────────────────────
+# ── Secrets ──────────────────────────────────────────────────────────────────
 # SECRET_KEY comes from the environment only (Render generates and stores it
 # encrypted). Nothing is hardcoded here.
 
@@ -51,9 +51,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# curl is used by the platform health check tooling.
+# curl is used by the platform health check tooling; tesseract-ocr is the OCR
+# engine behind the prescription-reading feature (pytesseract drives it).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl \
+ && apt-get install -y --no-install-recommends curl tesseract-ocr \
  && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

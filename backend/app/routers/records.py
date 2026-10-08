@@ -14,6 +14,7 @@ from ..core.config import get_settings
 from ..core.db import get_db
 from ..core.errors import bad_request, forbidden, not_found
 from ..deps import get_current_user
+from ..services.analysis import analyse
 from ..services.interpreter import assess_quality, run_ocr
 
 router = APIRouter(prefix="/api/records", tags=["records"])
@@ -64,12 +65,24 @@ async def upload_rx(patient_id: int, file: UploadFile = File(...), user: M.User 
         raise bad_request("Only image uploads are supported")
     quality = assess_quality(data)
     ocr_text, parsed = run_ocr(data, db)
+    # Price and safety-check whatever was read, so the patient sees medicines,
+    # tests, totals and the safety panel immediately — and gets the same payload
+    # shape the manual-entry fallback produces.
+    analysis = analyse(
+        db, patient=p,
+        medicines=[{"brand_id": m.get("brand_id"), "name": m.get("brand"),
+                    "dose": m.get("dose"), "duration_days": (m.get("duration") or {}).get("value")}
+                   for m in parsed.get("medicines", [])],
+        tests=[{"test_id": t.get("test_id"), "name": t.get("name")}
+               for t in parsed.get("tests", [])],
+    )
     up = M.RxUpload(patient_id=p.id, image_path=None, quality_json=json.dumps(quality),
                     ocr_text=ocr_text, parsed_json=json.dumps(parsed, ensure_ascii=False), status="parsed")
     db.add(up)
     db.commit()
     log_action(db, user.id, "rx_upload", "patient", p.patient_code)
-    return {"upload_id": up.id, "quality": quality, "ocr_text": ocr_text, "parsed": parsed}
+    return {"upload_id": up.id, "quality": quality, "ocr_text": ocr_text,
+            "parsed": parsed, "analysis": analysis}
 
 
 @router.get("/{patient_id}/uploads")

@@ -242,6 +242,12 @@ p { margin: 0 0 12px; color: var(--text-dim); line-height: 1.65; }
 .table-wrap { overflow-x: auto; }
 
 /* ---------- search ---------- */
+/* A card that HOSTS a typeahead must sit above its siblings. `.glass` uses
+   backdrop-filter, which creates a stacking context, so the dropdown's own
+   z-index cannot lift it above a later sibling card (the Investigations card
+   used to paint over the medicine suggestions). Raising the host card is the
+   only fix that works. */
+.card-search { position: relative; z-index: 40; }
 .search-hero { position: relative; }
 .search-input {
   width: 100%; padding: 18px 22px 18px 54px; border-radius: 16px; font-size: 1.05rem;
@@ -251,7 +257,7 @@ p { margin: 0 0 12px; color: var(--text-dim); line-height: 1.65; }
 .search-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--shadow), var(--glow); }
 .search-icon { position: absolute; left: 20px; top: 50%; transform: translateY(-50%); color: var(--accent); }
 .search-results {
-  position: absolute; top: calc(100% + 8px); left: 0; right: 0; z-index: 30; max-height: 420px;
+  position: absolute; top: calc(100% + 8px); left: 0; right: 0; z-index: 60; max-height: 420px;
   overflow-y: auto; border-radius: 14px; padding: 6px;
 }
 .search-item { padding: 11px 14px; border-radius: 10px; cursor: pointer; transition: background .14s; }
