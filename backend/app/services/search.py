@@ -71,9 +71,14 @@ def _fuzzy_brand(nq: str, brand_norm: str) -> bool:
         return False
     if fuzz.ratio(nq, brand_norm) < FUZZY_MIN_WHOLE:
         return False
-    # A typo almost never changes the first letter — anchoring on it removes
-    # unrelated same-suffix collisions ("celofn" vs "Acelon").
-    if nq[0] != brand_norm[0]:
+    # Anchor on the first TWO characters, matching the SQL candidate pre-filter.
+    # A single-character anchor missed every typo landing in position 2
+    # ("celofn" vs "Celofen") while still admitting unrelated same-suffix
+    # collisions; two characters is the smallest anchor that keeps recall.
+    if len(nq) >= 2 and len(brand_norm) >= 2:
+        if nq[:2] != brand_norm[:2]:
+            return False
+    elif nq[0] != brand_norm[0]:
         return False
     # Require comparable lengths: this is what keeps a short unrelated brand
     # such as "Elo"/"OR" away from a long query like "celofn".
@@ -154,20 +159,28 @@ def search_medicines(db: Session, q: str, limit: int = 20) -> list[dict]:
     company = func.lower(M.MedicineFts.company)
     alias = func.lower(M.MedicineFts.aliases)
     pattern = f"%{nq}%"
+    # Typo recall cannot be expressed with a SQL prefix test: the whole point of
+    # a typo is that the prefix differs ("celofn" vs "Celofen" - third letter).
+    # Prefixing on the FIRST TWO characters keeps recall for the realistic case
+    # (a slip in the middle/end of the word) while still bounding the candidate
+    # set. Prefixing on one character pulled in the entire 'a' block, and the
+    # old ``LIKE 'a%'``-only clause dropped every brand whose typo was in
+    # character 2; both are wrong for different reasons.
+    first2 = nq[:2] if nq else ""
+    clauses = [
+        brand.like(f"{nq}%"),
+        brand.like(pattern),
+        generic.like(f"{nq}%"),
+        generic.like(pattern),
+        company.like(f"{nq}%"),
+        alias.like(pattern),
+        M.MedicineFts.strength.like(pattern),
+        M.MedicineFts.form.like(pattern),
+    ]
+    if first2:
+        clauses.append(brand.like(f"{first2}%"))  # typo recall, still strictly scored
     candidates = db.scalars(
-        select(M.MedicineFts).where(
-            or_(
-                brand.like(f"{nq}%"),
-                brand.like(pattern),
-                generic.like(f"{nq}%"),
-                generic.like(pattern),
-                company.like(f"{nq}%"),
-                alias.like(pattern),
-                M.MedicineFts.strength.like(pattern),
-                M.MedicineFts.form.like(pattern),
-                brand.like(f"{nq[0]}%"),  # typo recall, still strictly scored
-            )
-        ).limit(6000)
+        select(M.MedicineFts).where(or_(*clauses)).limit(6000)
     ).all()
     rows = candidates
 

@@ -11,6 +11,7 @@ from .. import models as M
 from ..core.db import get_db
 from ..core.errors import not_found
 from ..deps import get_current_user
+from ..services.relations import brand_card, compute_relations
 from ..services.search import search_medicines
 
 router = APIRouter(prefix="/api", tags=["catalog"])
@@ -59,27 +60,11 @@ def medicine_detail(brand_id: int, db: Session = Depends(get_db)):
         raise not_found("Medicine not found")
     gen = db.get(M.Generic, b.generic_id) if b.generic_id else None
     comp = db.get(M.Company, b.company_id) if b.company_id else None
-    # other strengths/forms of same generic
-    others = []
-    if b.generic_id:
-        rows = db.scalars(
-            select(M.Brand).where(M.Brand.generic_id == b.generic_id, M.Brand.id != b.id).limit(30)
-        ).all()
-        others = [_brand_card(db, x) for x in rows]
-    # alternatives: same generic + same strength + same form, cheapest first
-    alts = []
-    if b.generic_id:
-        rows = db.scalars(
-            select(M.Brand).where(
-                M.Brand.generic_id == b.generic_id,
-                M.Brand.strength_text == b.strength_text,
-                M.Brand.form_name == b.form_name,
-                M.Brand.id != b.id,
-            )
-        ).all()
-        alts = sorted([_brand_card(db, x) for x in rows], key=lambda r: (r["unit_price"] is None, r["unit_price"] or 0))
+    # All relationship groups, each with a truthful total so the API can never
+    # truncate silently (see services/relations.py for the grouping rules).
+    rel = compute_relations(db, b)
     return {
-        "brand": _brand_card(db, b),
+        "brand": brand_card(db, b),
         "generic": {
             "id": gen.id if gen else None,
             "name": gen.name if gen else None,
@@ -100,8 +85,15 @@ def medicine_detail(brand_id: int, db: Session = Depends(get_db)):
             "contraindications": b.contraindications,
             "interaction": b.interaction,
         },
-        "other_strengths": others,
-        "alternatives": alts,
+        "alternatives": rel["alternatives"],
+        "alternatives_count": rel["alternatives_count"],
+        "other_forms": rel["other_forms"],
+        "other_forms_count": rel["other_forms_count"],
+        "other_strengths": rel["other_strengths"],
+        "other_strengths_count": rel["other_strengths_count"],
+        "brand_family": rel["brand_family"],
+        "brand_family_count": rel["brand_family_count"],
+        "same_generic_total": rel["same_generic_total"],
         "disclaimer": "Informational only. Not medical advice. Consult a registered doctor or pharmacist.",
     }
 
@@ -111,28 +103,33 @@ def medicine_alternatives(brand_id: int, db: Session = Depends(get_db)):
     b = db.get(M.Brand, brand_id)
     if not b:
         raise not_found("Medicine not found")
-    rows = db.scalars(
-        select(M.Brand).where(
-            M.Brand.generic_id == b.generic_id,
-            M.Brand.strength_text == b.strength_text,
-            M.Brand.form_name == b.form_name,
-            M.Brand.id != b.id,
-        )
-    ).all()
-    alts = sorted([_brand_card(db, x) for x in rows], key=lambda r: (r["unit_price"] is None, r["unit_price"] or 0))
-    return {"alternatives": alts, "note": "Other brands with the same active ingredient. Consult your doctor or pharmacist before switching."}
+    rel = compute_relations(db, b)
+    return {
+        "alternatives": rel["alternatives"],
+        "alternatives_count": rel["alternatives_count"],
+        "note": "Other brands with the same active ingredient, strength and dosage form. "
+                "Consult your doctor or pharmacist before switching.",
+    }
 
 
 # ---- tests
 @router.get("/tests/search")
-def tests_search(q: str = "", limit: int = 20, db: Session = Depends(get_db)):
+def tests_search(q: str = "", limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
+    """Test search with a truthful total so the UI can page through everything.
+
+    The previous version returned a bare list with no total and no offset: the
+    other 68 of 108 tests existed in the DB but were unreachable from the UI.
+    """
     stmt = select(M.LabTest)
     if q:
         like = f"%{q}%"
         stmt = stmt.where(or_(M.LabTest.name.ilike(like), M.LabTest.aliases.ilike(like)))
-    rows = db.scalars(stmt.limit(limit)).all()
-    return {"results": [{"id": t.id, "name": t.name, "slug": t.slug, "price_min": float(t.price_min) if t.price_min else None,
-                         "price_max": float(t.price_max) if t.price_max else None} for t in rows]}
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(stmt.order_by(M.LabTest.name).offset(offset).limit(limit)).all()
+    return {"total": total, "results": [
+        {"id": t.id, "name": t.name, "slug": t.slug,
+         "price_min": float(t.price_min) if t.price_min is not None else None,
+         "price_max": float(t.price_max) if t.price_max is not None else None} for t in rows]}
 
 
 @router.get("/tests/{test_id}")
@@ -163,6 +160,13 @@ def specialities(db: Session = Depends(get_db)):
 
 @router.get("/directory/doctors")
 def doctors(q: str = "", speciality: str = "", district: str = "", limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
+    """Doctor directory, ordered by name and fully pageable.
+
+    ``total`` is computed from the *filtered* statement, so the UI can show a
+    truthful count and reach every row. Ordering by name (not by insert id)
+    means paging is stable and the first page is not an arbitrary slice of the
+    source file - the reason the first 48 rows looked like a random sample.
+    """
     stmt = select(M.Doctor)
     if q:
         stmt = stmt.where(M.Doctor.name.ilike(f"%{q}%"))
@@ -170,11 +174,12 @@ def doctors(q: str = "", speciality: str = "", district: str = "", limit: int = 
         stmt = stmt.where(M.Doctor.speciality_name.ilike(f"%{speciality}%"))
     if district:
         stmt = stmt.where(M.Doctor.district_name == district)
-    total = db.scalar(select(func.count()).select_from(stmt.subquery()))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(stmt.order_by(M.Doctor.name).offset(offset).limit(limit)).all()
-    return {"total": total, "results": [
+    return {"total": total, "limit": limit, "offset": offset, "results": [
         {"id": d.id, "doctor_code": d.doctor_code, "name": d.name, "speciality": d.speciality_name,
-         "qualifications": d.qualifications, "district": d.district_name, "city": d.city} for d in rows]}
+         "qualifications": d.qualifications, "designation": d.designation,
+         "district": d.district_name, "city": d.city} for d in rows]}
 
 
 @router.get("/directory/doctors/{doctor_id}")
@@ -184,28 +189,48 @@ def doctor_detail(doctor_id: int, db: Session = Depends(get_db)):
         raise not_found("Doctor not found")
     affs = db.scalars(select(M.DoctorAffiliation).where(M.DoctorAffiliation.doctor_id == d.id)).all()
     scheds = db.scalars(select(M.DoctorSchedule).where(M.DoctorSchedule.doctor_id == d.id)).all()
+    hosp_ids = {a.hospital_id for a in affs if a.hospital_id}
+    hosp_names: dict[int, str] = {}
+    if hosp_ids:
+        hosp_names = {
+            h.id: h.name
+            for h in db.scalars(select(M.Hospital).where(M.Hospital.id.in_(hosp_ids))).all()
+        }
     return {
         "id": d.id, "doctor_code": d.doctor_code, "name": d.name, "speciality": d.speciality_name,
         "qualifications": d.qualifications, "designation": d.designation, "bmdc_no": d.bmdc_no,
-        "district": d.district_name, "city": d.city,
-        "affiliations": [{"hospital_id": a.hospital_id, "room": a.room, "fee": float(a.fee) if a.fee else None} for a in affs],
+        "district": d.district_name, "city": d.city, "profile_url": d.profile_url,
+        "affiliations": [{"hospital_id": a.hospital_id, "hospital": hosp_names.get(a.hospital_id),
+                          "room": a.room, "fee": float(a.fee) if a.fee is not None else None} for a in affs],
         "schedules": [{"id": s.id, "date": s.date, "total_serials": s.total_serials, "session_start": s.session_start,
-                       "session_end": s.session_end, "fee": float(s.fee) if s.fee else None} for s in scheds],
+                       "session_end": s.session_end, "fee": float(s.fee) if s.fee is not None else None} for s in scheds],
     }
+
+
+def _visible_hospital():
+    """Exclude rows that are not real, published facilities.
+
+    ``rejected`` - scrape artefacts (the repeated site-logo rows).
+    ``duplicate`` - the same facility published twice, differing only by a
+    trailing period or a trailing branch word; ``dedupe_hospitals.py``
+    reconciles these. Both are filtered here rather than deleted, so the
+    original data stays recoverable.
+    """
+    return func.coalesce(M.Hospital.data_status, "").notin_(("rejected", "duplicate"))
 
 
 @router.get("/directory/hospitals")
 def hospitals(q: str = "", district: str = "", limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
-    stmt = select(M.Hospital)
+    stmt = select(M.Hospital).where(_visible_hospital())
     if q:
         stmt = stmt.where(M.Hospital.name.ilike(f"%{q}%"))
     if district:
         stmt = stmt.where(M.Hospital.district_name == district)
-    total = db.scalar(select(func.count()).select_from(stmt.subquery()))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(stmt.order_by(M.Hospital.name).offset(offset).limit(limit)).all()
-    return {"total": total, "results": [
+    return {"total": total, "limit": limit, "offset": offset, "results": [
         {"id": h.id, "name": h.name, "district": h.district_name, "address": h.address,
-         "phone": h.phone, "hours": h.hours} for h in rows]}
+         "phone": h.phone, "hours": h.hours, "listed_doctors": h.listed_doctors} for h in rows]}
 
 
 @router.get("/directory/hospitals/{hospital_id}")
@@ -219,9 +244,11 @@ def hospital_detail(hospital_id: int, db: Session = Depends(get_db)):
         d = db.get(M.Doctor, a.doctor_id)
         if d:
             docs.append({"id": d.id, "name": d.name, "speciality": d.speciality_name, "room": a.room,
-                         "fee": float(a.fee) if a.fee else None})
+                         "fee": float(a.fee) if a.fee is not None else None})
+    docs.sort(key=lambda x: x["name"] or "")
     return {"id": h.id, "name": h.name, "district": h.district_name, "address": h.address, "phone": h.phone,
-            "hours": h.hours, "about": h.about, "doctors": docs}
+            "hours": h.hours, "about": h.about, "listed_doctors": h.listed_doctors,
+            "doctors": docs, "doctors_count": len(docs)}
 
 
 @router.get("/geo/districts")

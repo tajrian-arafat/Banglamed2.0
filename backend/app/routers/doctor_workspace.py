@@ -24,7 +24,9 @@ router = APIRouter(prefix="/api/doctor", tags=["doctor"])
 def _doctor(db: Session, user: M.User) -> M.Doctor:
     d = db.scalar(select(M.Doctor).where(M.Doctor.user_id == user.id))
     if not d:
-        raise bad_request("No doctor profile linked to this account")
+        # 403, not 400: the caller is authenticated but this account is not
+        # linked to a doctor profile, so the role check should have rejected it.
+        raise forbidden("No doctor profile linked to this account")
     return d
 
 
