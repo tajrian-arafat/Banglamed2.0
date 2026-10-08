@@ -40,6 +40,12 @@ from .norm import norm as normalize
 
 settings = get_settings()
 
+# Process-lifetime caches for the read-only catalog indexes. Building them per
+# request loaded 25k ORM rows and pushed the free-tier container into an OOM
+# restart; the catalog never changes at runtime, so caching is safe.
+_BRAND_INDEX_CACHE: dict[str, list[tuple]] | None = None
+_TEST_INDEX_CACHE: dict[str, tuple] | None = None
+
 # --------------------------------------------------------------------- patterns
 DOSE_PATTERNS = [
     (r"1\s*[-+]\s*0\s*[-+]\s*1", {"morning": 1, "noon": 0, "evening": 0, "night": 1}),
@@ -343,31 +349,50 @@ def _duration_from_line(line: str) -> dict[str, Any] | None:
     return {"value": value, "unit": unit}
 
 
-def _brand_index(db: Session) -> dict[str, list[M.MedicineFts]]:
+def _brand_index(db: Session) -> dict[str, list[tuple]]:
     """Normalised brand name -> the catalog rows carrying it.
 
     A brand name is not unique (the same name is sold by several companies), so
     the value is a list; the first row is used for display and the rest are
     available if a caller wants to disambiguate.
     """
-    rows = db.scalars(select(M.MedicineFts)).all()
-    by_name: dict[str, list[M.MedicineFts]] = {}
+    # Read only the columns the matcher needs, as plain tuples. Loading 25k
+    # ORM instances per request is what pushed the free-tier container into an
+    # OOM restart (the 502s); a tuple index is a fraction of the memory and is
+    # cached for the process lifetime, since the catalog is read-only.
+    global _BRAND_INDEX_CACHE
+    if _BRAND_INDEX_CACHE is not None:
+        return _BRAND_INDEX_CACHE
+    rows = db.execute(
+        select(M.MedicineFts.brand_id, M.MedicineFts.brand, M.MedicineFts.brand_n,
+               M.MedicineFts.generic, M.MedicineFts.company, M.MedicineFts.strength,
+               M.MedicineFts.form)
+    ).all()
+    by_name: dict[str, list[tuple]] = {}
     for r in rows:
-        n = r.brand_n or normalize(r.brand)
+        n = r[2] or normalize(r[1])
         if n:
             by_name.setdefault(n, []).append(r)
+    _BRAND_INDEX_CACHE = by_name
     return by_name
 
 
-def _test_index(db: Session) -> dict[str, M.LabTest]:
-    """Normalised test name (and each alias) -> the test row."""
-    rows = db.scalars(select(M.LabTest)).all()
-    by_name: dict[str, M.LabTest] = {}
+def _test_index(db: Session) -> dict[str, tuple]:
+    """Normalised test name (and each alias) -> the test row (as a tuple)."""
+    global _TEST_INDEX_CACHE
+    if _TEST_INDEX_CACHE is not None:
+        return _TEST_INDEX_CACHE
+    rows = db.execute(
+        select(M.LabTest.id, M.LabTest.name, M.LabTest.aliases,
+               M.LabTest.price_min, M.LabTest.price_max)
+    ).all()
+    by_name: dict[str, tuple] = {}
     for t in rows:
-        for cand in [t.name, *(t.aliases or "").split(",")]:
+        for cand in [t[1], *(t[2] or "").split(",")]:
             n = normalize(cand)
             if n:
                 by_name.setdefault(n, t)
+    _TEST_INDEX_CACHE = by_name
     return by_name
 
 
@@ -395,7 +420,7 @@ def _form_hint(line: str) -> str | None:
     return None
 
 
-def _pick_row(rows: list[M.MedicineFts], line: str) -> M.MedicineFts:
+def _pick_row(rows: list[tuple], line: str) -> tuple:
     """Choose among same-named products by the form the line asks for.
 
     "Cap. Seclo 20 mg" must resolve to the capsule, not the injection that
@@ -404,12 +429,12 @@ def _pick_row(rows: list[M.MedicineFts], line: str) -> M.MedicineFts:
     hint = _form_hint(line)
     if hint:
         for r in rows:
-            if hint in (r.form or "").lower():
+            if hint in (r[6] or "").lower():
                 return r
     return rows[0]
 
 
-def _match_brand(by_name: dict[str, list[M.MedicineFts]], cleaned: str, line: str = "") -> tuple[M.MedicineFts, float] | None:
+def _match_brand(by_name: dict[str, list[tuple]], cleaned: str, line: str = "") -> tuple[tuple, float] | None:
     """Strict, anchored brand match.
 
     Deliberately NOT a free-form fuzzy scan: ``fuzz.WRatio`` partial-matches, so
@@ -440,7 +465,7 @@ def _match_brand(by_name: dict[str, list[M.MedicineFts]], cleaned: str, line: st
     #     shortest *name* alone would have chosen "Seclo Injection" over the
     #     capsule the line actually asked for.
     if len(first) >= 3:
-        pooled: list[M.MedicineFts] = []
+        pooled: list[tuple] = []
         for name, rows in by_name.items():
             if name.startswith(first + " "):
                 pooled.extend(rows)
@@ -448,7 +473,7 @@ def _match_brand(by_name: dict[str, list[M.MedicineFts]], cleaned: str, line: st
             return _pick_row(pooled, line), 0.98
 
     # 3. a brand is a prefix of the line at a word boundary ("napa 500" -> Napa)
-    best: tuple[str, list[M.MedicineFts]] | None = None
+    best: tuple[str, list[tuple]] | None = None
     for name, rows in by_name.items():
         if len(name) < 4:
             continue
@@ -467,7 +492,7 @@ def _match_brand(by_name: dict[str, list[M.MedicineFts]], cleaned: str, line: st
     return None
 
 
-def _match_test(by_name: dict[str, M.LabTest], line: str) -> tuple[M.LabTest, float] | None:
+def _match_test(by_name: dict[str, tuple], line: str) -> tuple[tuple, float] | None:
     """Strict, anchored test match (same reasoning as ``_match_brand``)."""
     nq = normalize(line)
     if not nq:
@@ -475,7 +500,7 @@ def _match_test(by_name: dict[str, M.LabTest], line: str) -> tuple[M.LabTest, fl
     if nq in by_name:
         return by_name[nq], 1.0
 
-    best: tuple[str, M.LabTest] | None = None
+    best: tuple[str, tuple] | None = None
     for name, t in by_name.items():
         if len(name) < 4:
             continue
@@ -543,12 +568,12 @@ def extract_from_text(db: Session, text: str) -> dict[str, Any]:
         tmatch = _match_test(test_by_name, line)
         if tmatch:
             t, score = tmatch
-            if t.id not in seen_tests:
-                seen_tests.add(t.id)
+            if t[0] not in seen_tests:
+                seen_tests.add(t[0])
                 tests.append({
-                    "raw": line, "test_id": t.id, "name": t.name,
-                    "price_min": float(t.price_min) if t.price_min is not None else None,
-                    "price_max": float(t.price_max) if t.price_max is not None else None,
+                    "raw": line, "test_id": t[0], "name": t[1],
+                    "price_min": float(t[3]) if t[3] is not None else None,
+                    "price_max": float(t[4]) if t[4] is not None else None,
                     "score": score,
                 })
             continue
@@ -561,17 +586,17 @@ def extract_from_text(db: Session, text: str) -> dict[str, Any]:
         if not bmatch:
             continue
         r, score = bmatch
-        if r.brand_id in seen_brands:
+        if r[0] in seen_brands:
             continue
-        seen_brands.add(r.brand_id)
+        seen_brands.add(r[0])
         medicines.append({
             "raw": line,
-            "brand_id": r.brand_id,
-            "brand": r.brand,
-            "generic": r.generic,
-            "company": r.company,
-            "strength": r.strength,
-            "form": r.form,
+            "brand_id": r[0],
+            "brand": r[1],
+            "generic": r[3],
+            "company": r[4],
+            "strength": r[5],
+            "form": r[6],
             "score": score,
             "dose": _dose_from_line(line),
             "duration": _duration_from_line(line),
